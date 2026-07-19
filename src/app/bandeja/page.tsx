@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { AppHeader } from "@/components/layout/app-header";
 import { InboxList } from "@/components/notifications/inbox-list";
+import { getSessionUser } from "@/lib/auth/session";
 import { dedupeNotifications, deleteEstadoCambioNotifications } from "@/lib/notifications/create";
 import { countAdjudicadosAMi, getNotifications, getUnreadCount } from "@/lib/notifications/queries";
 import { getOnboardingStatus } from "@/lib/onboarding/status";
@@ -11,12 +12,14 @@ export default async function BandejaPage() {
     redirect("/onboarding");
   }
 
+  const session = await getSessionUser();
+
   await dedupeNotifications().catch(() => undefined);
   await deleteEstadoCambioNotifications().catch(() => undefined);
 
   const [notifications, unreadCount, adjudicadosCount] = await Promise.all([
-    getNotifications(),
-    getUnreadCount(),
+    getNotifications({ session }),
+    getUnreadCount(session),
     countAdjudicadosAMi(),
   ]);
 

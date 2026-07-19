@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +19,8 @@ function tipoBadge(tipo: string) {
       return <Badge variant="destructive">API key</Badge>;
     case "ingesta_error":
       return <Badge variant="destructive">Ingesta</Badge>;
+    case "mencion":
+      return <Badge className="bg-[#d4a017] text-[#11233d]">Mención</Badge>;
     default:
       return <Badge variant="outline">{tipo}</Badge>;
   }
@@ -155,6 +158,14 @@ export function InboxList({
                       )}
                       {n.process_nombre ? ` — ${n.process_nombre}` : ""}
                     </p>
+                  )}
+                  {n.kanban_card_id && (
+                    <Link
+                      href={`/kanban?card=${n.kanban_card_id}`}
+                      className="inline-block text-sm font-medium text-[#d4a017] hover:underline"
+                    >
+                      Ver tarjeta →
+                    </Link>
                   )}
                 </CardContent>
               </Card>

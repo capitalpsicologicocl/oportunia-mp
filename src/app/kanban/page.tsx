@@ -23,6 +23,7 @@ export default async function KanbanPage({ searchParams }: KanbanPageProps) {
   }
 
   const q = param(params.q);
+  const initialCardId = param(params.card);
   const board = await getKanbanBoard({ q });
 
   return (
@@ -34,7 +35,7 @@ export default async function KanbanPage({ searchParams }: KanbanPageProps) {
           Solo aparecen procesos enviados a <strong>Pre-Evaluación</strong> desde el Dashboard. Arrastra
           entre columnas; usa el ícono ⋮⋮ para mover. Las no adjudicadas pueden descartarse al Archivo CRM.
         </p>
-        <KanbanBoard initialData={board} initialQ={q} />
+        <KanbanBoard initialData={board} initialQ={q} initialCardId={initialCardId} />
       </main>
     </div>
   );

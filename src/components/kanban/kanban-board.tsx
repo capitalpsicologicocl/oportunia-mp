@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -61,9 +61,10 @@ function flattenColumns(grouped: Record<KanbanColumna, KanbanCardRow[]>): Kanban
 interface KanbanBoardProps {
   initialData: KanbanBoardData;
   initialQ?: string;
+  initialCardId?: string;
 }
 
-export function KanbanBoard({ initialData, initialQ = "" }: KanbanBoardProps) {
+export function KanbanBoard({ initialData, initialQ = "", initialCardId }: KanbanBoardProps) {
   const [cards, setCards] = useState(initialData.cards);
   const [grouped, setGrouped] = useState(() => groupByColumn(initialData.cards));
   const [yearStats, setYearStats] = useState(initialData.yearStats);
@@ -77,6 +78,12 @@ export function KanbanBoard({ initialData, initialQ = "" }: KanbanBoardProps) {
   const [message, setMessage] = useState<string | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+
+  useEffect(() => {
+    if (!initialCardId) return;
+    const card = cards.find((c) => c.id === initialCardId);
+    if (card) setSelectedCard(card);
+  }, [initialCardId, cards]);
 
   const stats = useMemo(() => {
     const byColumn = Object.fromEntries(KANBAN_COLUMNS.map((col) => [col, grouped[col].length])) as Record<

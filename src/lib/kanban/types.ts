@@ -1,5 +1,7 @@
 import type { KanbanColumna, ModalidadOtec, Postulabilidad, ProcessTipo } from "@/types/database";
 import type { AnalisisFinancieroJson } from "@/lib/kanban/financial-analysis";
+import type { BacklogItem } from "@/lib/kanban/backlog";
+import type { UbicacionChile } from "@/lib/kanban/ubicaciones";
 
 export interface KanbanCostoItem {
   concepto: string;
@@ -54,6 +56,7 @@ export interface KanbanCardRow {
   descartado: boolean;
   estado_interno: string | null;
   responsable: string | null;
+  responsable_user_id: string | null;
   fecha_postulacion: string | null;
   monto_ofertado: number | null;
   observaciones: string | null;
@@ -69,6 +72,8 @@ export interface KanbanCardRow {
   link_propuesta_tecnica: string | null;
   link_carpeta_interna: string | null;
   campos_descriptivos: import("@/lib/kanban/financial-analysis").CamposDescriptivosJson;
+  ubicaciones: UbicacionChile[];
+  backlog: BacklogItem[];
 }
 
 export interface KanbanBoardData {
@@ -95,6 +100,7 @@ export interface KanbanCardUpdatePayload {
   en_pipeline?: boolean;
   estado_interno?: string | null;
   responsable?: string | null;
+  responsable_user_id?: string | null;
   fecha_postulacion?: string | null;
   monto_ofertado?: number | null;
   observaciones?: string | null;
@@ -108,4 +114,6 @@ export interface KanbanCardUpdatePayload {
   link_propuesta_tecnica?: string | null;
   link_carpeta_interna?: string | null;
   campos_descriptivos?: import("@/lib/kanban/financial-analysis").CamposDescriptivosJson;
+  ubicaciones_json?: UbicacionChile[];
+  backlog_json?: BacklogItem[];
 }

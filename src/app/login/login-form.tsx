@@ -11,7 +11,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 export default function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const next = searchParams.get("next") ?? "/";
+  const next = searchParams.get("next") ?? "/compra-agil";
+  const timeout = searchParams.get("reason") === "timeout";
 
   const [rut, setRut] = useState("");
   const [password, setPassword] = useState("");
@@ -64,6 +65,12 @@ export default function LoginForm() {
             {needsSetup ? "Crear usuario principal" : "Iniciar sesión"}
           </h1>
         </div>
+
+        {timeout && (
+          <Alert>
+            <AlertDescription>Tu sesión expiró por inactividad (60 min). Vuelve a ingresar.</AlertDescription>
+          </Alert>
+        )}
 
         {error && (
           <Alert variant="destructive">

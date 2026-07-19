@@ -4,10 +4,21 @@ import { orgHasUsers } from "@/lib/auth/db";
 import { hasValidSessionCookie } from "@/lib/auth/session-edge";
 import { getOnboardingStatus } from "@/lib/onboarding/status";
 
-const PUBLIC_PREFIXES = ["/login", "/api/auth/login", "/api/auth/logout", "/api/auth/status", "/api/auth/setup"];
+const PUBLIC_PREFIXES = [
+  "/",
+  "/login",
+  "/api/auth/login",
+  "/api/auth/logout",
+  "/api/auth/status",
+  "/api/auth/setup",
+];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  if (pathname === "/") {
+    return NextResponse.next();
+  }
 
   if (
     PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`)) ||

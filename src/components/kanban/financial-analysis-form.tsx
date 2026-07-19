@@ -15,6 +15,7 @@ import {
   type AnalisisFinancieroJson,
   IVA_DEFAULT,
   emptyDetalleAlojamiento,
+  emptyDetalleCoffee,
   emptyDetalleTrasladoLocal,
   emptyDetalleTrasladoLargo,
   emptyDetalleViatico,
@@ -126,7 +127,7 @@ export function FinancialAnalysisForm({
   onChange: (next: AnalisisFinancieroJson) => void;
 }) {
   const [sheet, setSheet] = useState<
-    "ida" | "regreso" | "locales" | "alojamiento" | "viaticos" | "materiales" | "otros" | "coffeeAm" | "coffeePm" | "almuerzo" | null
+    "ida" | "regreso" | "locales" | "alojamiento" | "viaticos" | "materiales" | "otros" | "coffee" | "almuerzo" | null
   >(null);
 
   function patch(partial: Partial<AnalisisFinancieroJson>) {
@@ -150,23 +151,31 @@ export function FinancialAnalysisForm({
         <p className="text-sm font-medium">Total: {formatMontoCLP(value.arriendo.total)}</p>
       </Section>
 
-      {(
-        [
-          ["coffeeAm", "Coffee AM"],
-          ["coffeePm", "Coffee PM"],
-          ["almuerzo", "Almuerzo"],
-        ] as const
-      ).map(([key, title]) => {
-        const line = value[key];
-        return (
-          <Section key={key} title={title} onDetail={() => setSheet(key)}>
-            <NumInput label="Valor unit. sin IVA" value={line.valorUnitarioSinIva} onChange={(v) => patch({ [key]: { ...line, valorUnitarioSinIva: v } })} />
-            <NumInput label="IVA %" value={line.ivaPct} onChange={(v) => patch({ [key]: { ...line, ivaPct: v ?? IVA_DEFAULT } })} />
-            <NumInput label="Cantidad" value={line.cantidad} onChange={(v) => patch({ [key]: { ...line, cantidad: v } })} />
-            <p className="text-sm font-medium">Subtotal: {formatMontoCLP(line.subtotal)}</p>
-          </Section>
-        );
-      })}
+      <Section title="Coffee" onDetail={() => setSheet("coffee")}>
+        <NumInput
+          label="Valor unit. sin IVA"
+          value={value.coffee.valorUnitarioSinIva}
+          onChange={(v) => patch({ coffee: { ...value.coffee, valorUnitarioSinIva: v } })}
+        />
+        <NumInput
+          label="IVA %"
+          value={value.coffee.ivaPct}
+          onChange={(v) => patch({ coffee: { ...value.coffee, ivaPct: v ?? IVA_DEFAULT } })}
+        />
+        <NumInput
+          label="Cantidad"
+          value={value.coffee.cantidad}
+          onChange={(v) => patch({ coffee: { ...value.coffee, cantidad: v } })}
+        />
+        <p className="text-sm font-medium">Subtotal: {formatMontoCLP(value.coffee.subtotal)}</p>
+      </Section>
+
+      <Section title="Almuerzo" onDetail={() => setSheet("almuerzo")}>
+        <NumInput label="Valor unit. sin IVA" value={value.almuerzo.valorUnitarioSinIva} onChange={(v) => patch({ almuerzo: { ...value.almuerzo, valorUnitarioSinIva: v } })} />
+        <NumInput label="IVA %" value={value.almuerzo.ivaPct} onChange={(v) => patch({ almuerzo: { ...value.almuerzo, ivaPct: v ?? IVA_DEFAULT } })} />
+        <NumInput label="Cantidad" value={value.almuerzo.cantidad} onChange={(v) => patch({ almuerzo: { ...value.almuerzo, cantidad: v } })} />
+        <p className="text-sm font-medium">Subtotal: {formatMontoCLP(value.almuerzo.subtotal)}</p>
+      </Section>
 
       <Section title="Traslado Ida" onDetail={() => setSheet("ida")}>
         <NumInput label="N° personas" value={value.trasladoIda.numPersonas} onChange={(v) => patch({ trasladoIda: { ...value.trasladoIda, numPersonas: v } })} />
@@ -450,34 +459,146 @@ export function FinancialAnalysisForm({
         </Button>
       </DetailSheet>
 
-      {/* Coffee / Almuerzo detail sheets */}
-      {(["coffeeAm", "coffeePm", "almuerzo"] as const).map((key) => {
-        const titles = { coffeeAm: "Detalle Coffee AM", coffeePm: "Detalle Coffee PM", almuerzo: "Detalle Almuerzo" };
-        const line = value[key];
-        return (
-          <DetailSheet key={key} title={titles[key]} open={sheet === key} onClose={() => setSheet(null)}>
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <Label className="text-xs">Proveedor / catering</Label>
-                <Input
-                  value={line.detalleProveedor ?? ""}
-                  placeholder="Nombre proveedor"
-                  onChange={(e) => patch({ [key]: { ...line, detalleProveedor: e.target.value || null } })}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Detalle del servicio</Label>
-                <textarea
-                  className="min-h-24 w-full rounded-lg border px-3 py-2 text-sm"
-                  value={line.detalleNotas ?? ""}
-                  placeholder="Menú, restricciones, horarios…"
-                  onChange={(e) => patch({ [key]: { ...line, detalleNotas: e.target.value || null } })}
-                />
-              </div>
+      {/* Coffee detail sheet */}
+      <DetailSheet title="Detalle Coffee" open={sheet === "coffee"} onClose={() => setSheet(null)}>
+        <div className="mb-3 space-y-3">
+          <div className="space-y-1">
+            <Label className="text-xs">Proveedor / catering</Label>
+            <Input
+              value={value.coffee.detalleProveedor ?? ""}
+              placeholder="Nombre proveedor"
+              onChange={(e) =>
+                patch({ coffee: { ...value.coffee, detalleProveedor: e.target.value || null } })
+              }
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Notas generales</Label>
+            <textarea
+              className="min-h-16 w-full rounded-lg border px-3 py-2 text-sm"
+              value={value.coffee.detalleNotas ?? ""}
+              placeholder="Menú, restricciones, horarios…"
+              onChange={(e) =>
+                patch({ coffee: { ...value.coffee, detalleNotas: e.target.value || null } })
+              }
+            />
+          </div>
+        </div>
+        {(value.coffee.detalles.length ? value.coffee.detalles : [emptyDetalleCoffee("am")]).map((d, i) => (
+          <div key={i} className="mb-3 grid gap-2 rounded border p-2 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Periodo</Label>
+              <Select
+                value={d.periodo}
+                onValueChange={(v) => {
+                  const detalles = [...(value.coffee.detalles.length ? value.coffee.detalles : [d])];
+                  detalles[i] = { ...d, periodo: (v ?? "am") as "am" | "pm" };
+                  patch({ coffee: { ...value.coffee, detalles } });
+                }}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="am">AM</SelectItem>
+                  <SelectItem value="pm">PM</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          </DetailSheet>
-        );
-      })}
+            <NumInput
+              label="Cantidad"
+              value={d.cantidad}
+              onChange={(v) => {
+                const detalles = [...(value.coffee.detalles.length ? value.coffee.detalles : [d])];
+                detalles[i] = { ...d, cantidad: v };
+                patch({ coffee: { ...value.coffee, detalles } });
+              }}
+            />
+            <Input
+              className="sm:col-span-2"
+              placeholder="Descripción"
+              value={d.descripcion ?? ""}
+              onChange={(e) => {
+                const detalles = [...(value.coffee.detalles.length ? value.coffee.detalles : [d])];
+                detalles[i] = { ...d, descripcion: e.target.value || null };
+                patch({ coffee: { ...value.coffee, detalles } });
+              }}
+            />
+            <NumInput
+              label={d.incluyeIva ? "Valor unit. con IVA" : "Valor unit. sin IVA"}
+              value={d.valorUnitario}
+              onChange={(v) => {
+                const detalles = [...(value.coffee.detalles.length ? value.coffee.detalles : [d])];
+                detalles[i] = { ...d, valorUnitario: v };
+                patch({ coffee: { ...value.coffee, detalles } });
+              }}
+            />
+            <div className="space-y-1">
+              <Label className="text-xs">IVA %</Label>
+              <Input
+                type="number"
+                value={d.ivaPct}
+                disabled={d.incluyeIva}
+                onChange={(e) => {
+                  const detalles = [...(value.coffee.detalles.length ? value.coffee.detalles : [d])];
+                  detalles[i] = { ...d, ivaPct: e.target.value ? Number(e.target.value) : IVA_DEFAULT };
+                  patch({ coffee: { ...value.coffee, detalles } });
+                }}
+              />
+            </div>
+            <div className="flex items-center gap-2 sm:col-span-2">
+              <input
+                type="checkbox"
+                id={`coffee-iva-${i}`}
+                checked={d.incluyeIva}
+                onChange={(e) => {
+                  const detalles = [...(value.coffee.detalles.length ? value.coffee.detalles : [d])];
+                  detalles[i] = { ...d, incluyeIva: e.target.checked };
+                  patch({ coffee: { ...value.coffee, detalles } });
+                }}
+              />
+              <Label htmlFor={`coffee-iva-${i}`} className="text-xs cursor-pointer">
+                Valor incluye IVA
+              </Label>
+            </div>
+          </div>
+        ))}
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() =>
+            patch({
+              coffee: {
+                ...value.coffee,
+                detalles: [...value.coffee.detalles, emptyDetalleCoffee("am")],
+              },
+            })
+          }
+        >
+          + Agregar coffee
+        </Button>
+      </DetailSheet>
+
+      <DetailSheet title="Detalle Almuerzo" open={sheet === "almuerzo"} onClose={() => setSheet(null)}>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label className="text-xs">Proveedor / catering</Label>
+            <Input
+              value={value.almuerzo.detalleProveedor ?? ""}
+              placeholder="Nombre proveedor"
+              onChange={(e) => patch({ almuerzo: { ...value.almuerzo, detalleProveedor: e.target.value || null } })}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Detalle del servicio</Label>
+            <textarea
+              className="min-h-24 w-full rounded-lg border px-3 py-2 text-sm"
+              value={value.almuerzo.detalleNotas ?? ""}
+              placeholder="Menú, restricciones, horarios…"
+              onChange={(e) => patch({ almuerzo: { ...value.almuerzo, detalleNotas: e.target.value || null } })}
+            />
+          </div>
+        </div>
+      </DetailSheet>
 
       {/* Materiales / Otros tables */}
       {(["materiales", "otros"] as const).map((key) => (

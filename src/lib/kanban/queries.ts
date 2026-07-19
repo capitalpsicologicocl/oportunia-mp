@@ -7,6 +7,8 @@ import {
   totalCostos,
 } from "@/lib/kanban/financial-analysis";
 import type { KanbanBoardData, KanbanCardRow, KanbanCostoItem, KanbanCustomField, KanbanYearStats } from "@/lib/kanban/types";
+import { parseBacklogJson } from "@/lib/kanban/backlog";
+import { parseLugarEjecucion, parseUbicacionesJson } from "@/lib/kanban/ubicaciones";
 import { KANBAN_COLUMNS } from "@/lib/kanban/columns";
 import { DEFAULT_ORG_ID, type KanbanColumna, type ModalidadOtec, type Postulabilidad } from "@/types/database";
 
@@ -24,6 +26,7 @@ const CARD_SELECT = `
   descartado,
   estado_interno,
   responsable,
+  responsable_user_id,
   fecha_postulacion,
   monto_ofertado,
   observaciones,
@@ -40,6 +43,8 @@ const CARD_SELECT = `
   link_propuesta_tecnica,
   link_carpeta_interna,
   campos_descriptivos_json,
+  ubicaciones_json,
+  backlog_json,
   processes (
     codigo_externo,
     nombre,
@@ -103,6 +108,12 @@ function mapCardRow(raw: Record<string, unknown>): KanbanCardRow | null {
   const customRaw = (raw.kanban_custom_fields ?? []) as Array<Record<string, unknown>>;
   const montoOfertado = (raw.monto_ofertado as number | null) ?? null;
   const analisisJson = parseAnalisisFinanciero(raw.analisis_financiero_json);
+  const lugarEjecucion = (processRaw.lugar_ejecucion as string | null) ?? null;
+  let ubicaciones = parseUbicacionesJson(raw.ubicaciones_json);
+  if (ubicaciones.length === 0 && lugarEjecucion) {
+    ubicaciones = parseLugarEjecucion(lugarEjecucion);
+  }
+  const backlog = parseBacklogJson(raw.backlog_json);
 
   return {
     id: raw.id as string,
@@ -113,6 +124,7 @@ function mapCardRow(raw: Record<string, unknown>): KanbanCardRow | null {
     descartado: Boolean(raw.descartado),
     estado_interno: (raw.estado_interno as string | null) ?? null,
     responsable: (raw.responsable as string | null) ?? null,
+    responsable_user_id: (raw.responsable_user_id as string | null) ?? null,
     fecha_postulacion: (raw.fecha_postulacion as string | null) ?? null,
     monto_ofertado: montoOfertado,
     observaciones: (raw.observaciones as string | null) ?? null,
@@ -128,7 +140,7 @@ function mapCardRow(raw: Record<string, unknown>): KanbanCardRow | null {
       hora_cierre: (processRaw.hora_cierre as string | null) ?? null,
       hora_cierre_2: (processRaw.hora_cierre_2 as string | null) ?? null,
       organismo_nombre: (processRaw.organismo_nombre as string | null) ?? null,
-      lugar_ejecucion: (processRaw.lugar_ejecucion as string | null) ?? null,
+      lugar_ejecucion: lugarEjecucion,
       url_publica: (processRaw.url_publica as string | null) ?? null,
       adjudicado_a_mi: Boolean(processRaw.adjudicado_a_mi),
       adjudicado_rut: (processRaw.adjudicado_rut as string | null) ?? null,
@@ -164,6 +176,8 @@ function mapCardRow(raw: Record<string, unknown>): KanbanCardRow | null {
     link_propuesta_tecnica: (raw.link_propuesta_tecnica as string | null) ?? null,
     link_carpeta_interna: (raw.link_carpeta_interna as string | null) ?? null,
     campos_descriptivos: parseCamposDescriptivos(raw.campos_descriptivos_json),
+    ubicaciones,
+    backlog,
   };
 }
 

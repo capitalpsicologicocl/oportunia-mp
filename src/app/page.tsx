@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { HomePage } from "@/components/landing/home-page";
 
 export default function Home() {
-  redirect("/compra-agil");
+  return <HomePage />;
 }

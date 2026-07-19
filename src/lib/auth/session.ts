@@ -4,7 +4,9 @@ import { createHmac, timingSafeEqual } from "crypto";
 export { orgHasUsers } from "@/lib/auth/db";
 
 const COOKIE_NAME = "oportunia_session";
-const MAX_AGE_SEC = 60 * 60 * 24 * 14;
+/** Sesión máxima 60 min desde emisión / última renovación. */
+export const SESSION_MAX_AGE_SEC = 60 * 60;
+const MAX_AGE_SEC = SESSION_MAX_AGE_SEC;
 
 export interface SessionUser {
   userId: string;

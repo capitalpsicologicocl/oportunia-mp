@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
+import { getSessionUser } from "@/lib/auth/session";
+import { createMentionNotification } from "@/lib/notifications/mentions";
 import { createServiceClient } from "@/lib/supabase/server";
+import { parseBacklogJson, type BacklogItem } from "@/lib/kanban/backlog";
 import { recalcularAnalisis } from "@/lib/kanban/financial-analysis";
 import { getArchivedKanbanCards, getKanbanBoard } from "@/lib/kanban/queries";
 import type { KanbanCardUpdatePayload } from "@/lib/kanban/types";
@@ -23,13 +26,30 @@ interface RouteParams {
 
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
   try {
+    const session = await getSessionUser();
+    if (!session) {
+      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+    }
+
     const { id } = await params;
     const body = (await request.json()) as KanbanCardUpdatePayload;
     const supabase = createServiceClient();
 
     const { data: card, error: cardError } = await supabase
       .from("kanban_cards")
-      .select("id, monto_ofertado")
+      .select(
+        `
+        id,
+        monto_ofertado,
+        responsable_user_id,
+        backlog_json,
+        process_id,
+        processes (
+          codigo_externo,
+          nombre
+        )
+      `
+      )
       .eq("id", id)
       .eq("organization_id", DEFAULT_ORG_ID)
       .maybeSingle();
@@ -57,7 +77,52 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       cardUpdate.en_pipeline = body.en_pipeline;
     }
     if (body.estado_interno !== undefined) cardUpdate.estado_interno = body.estado_interno;
-    if (body.responsable !== undefined) cardUpdate.responsable = body.responsable;
+
+    if (body.responsable_user_id !== undefined) {
+      const nextUserId = body.responsable_user_id;
+      const previousUserId = card.responsable_user_id as string | null;
+
+      if (nextUserId === null) {
+        cardUpdate.responsable_user_id = null;
+        cardUpdate.responsable = null;
+      } else {
+        const { data: assignee, error: assigneeError } = await supabase
+          .from("org_users")
+          .select("id, nombre")
+          .eq("id", nextUserId)
+          .eq("organization_id", DEFAULT_ORG_ID)
+          .eq("activo", true)
+          .maybeSingle();
+
+        if (assigneeError) throw new Error(assigneeError.message);
+        if (!assignee) {
+          return NextResponse.json({ error: "Usuario del equipo no encontrado" }, { status: 400 });
+        }
+
+        cardUpdate.responsable_user_id = assignee.id;
+        cardUpdate.responsable = `@${assignee.nombre}`;
+
+        if (assignee.id !== previousUserId && assignee.id !== session.userId) {
+          const processRaw = card.processes as
+            | { codigo_externo: string; nombre: string }
+            | { codigo_externo: string; nombre: string }[]
+            | null;
+          const process = Array.isArray(processRaw) ? processRaw[0] : processRaw;
+
+          await createMentionNotification({
+            userId: assignee.id,
+            kanbanCardId: card.id,
+            processId: card.process_id,
+            assignerName: session.nombre,
+            processCodigo: process?.codigo_externo ?? "Proceso",
+            processNombre: process?.nombre ?? "",
+          });
+        }
+      }
+    } else if (body.responsable !== undefined) {
+      cardUpdate.responsable = body.responsable;
+    }
+
     if (body.fecha_postulacion !== undefined) cardUpdate.fecha_postulacion = body.fecha_postulacion;
     if (body.monto_ofertado !== undefined) cardUpdate.monto_ofertado = body.monto_ofertado;
     if (body.observaciones !== undefined) cardUpdate.observaciones = body.observaciones;
@@ -85,9 +150,29 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     if (body.campos_descriptivos !== undefined) {
       cardUpdate.campos_descriptivos_json = body.campos_descriptivos;
     }
+    if (body.ubicaciones_json !== undefined) {
+      cardUpdate.ubicaciones_json = body.ubicaciones_json;
+    }
+    if (body.backlog_json !== undefined) {
+      cardUpdate.backlog_json = body.backlog_json;
+    }
 
     const { error: updateError } = await supabase.from("kanban_cards").update(cardUpdate).eq("id", id);
     if (updateError) throw new Error(updateError.message);
+
+    if (body.backlog_json !== undefined) {
+      const previousBacklog = parseBacklogJson(card.backlog_json);
+      const nextBacklog = parseBacklogJson(body.backlog_json);
+      await notifyNewBacklogAssignees({
+        supabase,
+        session,
+        cardId: card.id,
+        processId: card.process_id,
+        processRaw: card.processes,
+        previous: previousBacklog,
+        next: nextBacklog,
+      });
+    }
 
     if (body.otec !== undefined) {
       if (body.otec === null) {
@@ -146,4 +231,53 @@ function revalidateDashboardPaths() {
   revalidatePath("/compra-agil");
   revalidatePath("/licitaciones");
   revalidatePath("/kanban");
+  revalidatePath("/perfil");
+}
+
+async function notifyNewBacklogAssignees({
+  supabase,
+  session,
+  cardId,
+  processId,
+  processRaw,
+  previous,
+  next,
+}: {
+  supabase: ReturnType<typeof createServiceClient>;
+  session: NonNullable<Awaited<ReturnType<typeof getSessionUser>>>;
+  cardId: string;
+  processId: string;
+  processRaw: unknown;
+  previous: BacklogItem[];
+  next: BacklogItem[];
+}) {
+  const prevById = new Map(previous.map((item) => [item.id, item]));
+  const process = Array.isArray(processRaw)
+    ? (processRaw[0] as { codigo_externo: string; nombre: string } | undefined)
+    : (processRaw as { codigo_externo: string; nombre: string } | null);
+
+  for (const item of next) {
+    const prev = prevById.get(item.id);
+    const userId = item.responsable_user_id;
+    if (!userId || userId === prev?.responsable_user_id || userId === session.userId) continue;
+
+    const { data: assignee } = await supabase
+      .from("org_users")
+      .select("id")
+      .eq("id", userId)
+      .eq("organization_id", DEFAULT_ORG_ID)
+      .eq("activo", true)
+      .maybeSingle();
+
+    if (!assignee) continue;
+
+    await createMentionNotification({
+      userId: assignee.id,
+      kanbanCardId: cardId,
+      processId,
+      assignerName: session.nombre,
+      processCodigo: process?.codigo_externo ?? "Proceso",
+      processNombre: `${process?.nombre ?? ""} — ${item.titulo}`.trim(),
+    });
+  }
 }

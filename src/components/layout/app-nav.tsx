@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Menu } from "lucide-react";
+import { ChevronDown, LogOut, Menu } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const PRIMARY_NAV = [
@@ -21,7 +21,7 @@ const MORE_NAV = [
 
 function isNavActive(pathname: string, href: string): boolean {
   if (href === "/compra-agil") {
-    return pathname === "/" || pathname === "/compra-agil" || pathname.startsWith("/compra-agil/");
+    return pathname === "/compra-agil" || pathname.startsWith("/compra-agil/");
   }
   return pathname === href || pathname.startsWith(`${href}/`);
 }
@@ -43,9 +43,22 @@ export function AppNav({
   userName?: string;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const moreActive = MORE_NAV.some((item) => isNavActive(pathname, item.href));
+
+  async function handleLogout() {
+    setLoggingOut(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+      router.replace("/login");
+      router.refresh();
+    } finally {
+      setLoggingOut(false);
+    }
+  }
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -121,6 +134,17 @@ export function AppNav({
         </span>
         <span className="hidden max-w-[140px] truncate lg:inline">{userName ?? "Perfil"}</span>
       </Link>
+
+      <button
+        type="button"
+        onClick={handleLogout}
+        disabled={loggingOut}
+        title="Cerrar sesión"
+        className="ml-0.5 inline-flex items-center gap-1 rounded-lg px-2.5 py-2 text-sm font-medium text-white/80 transition-all hover:bg-white/10 hover:text-white disabled:opacity-50"
+      >
+        <LogOut className="size-4" />
+        <span className="hidden sm:inline">{loggingOut ? "…" : "Salir"}</span>
+      </button>
     </nav>
   );
 }

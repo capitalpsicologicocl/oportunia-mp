@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -12,7 +13,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CardBacklogPanel } from "@/components/kanban/card-backlog-panel";
 import { FinancialAnalysisForm } from "@/components/kanban/financial-analysis-form";
+import { TeamMemberSelect } from "@/components/kanban/team-member-select";
 import { formatFechaCL, formatHora, tipoLabel } from "@/lib/dashboard/format";
 import { KANBAN_COLUMN_LABELS } from "@/lib/kanban/columns";
 import {
@@ -22,7 +26,12 @@ import {
   type CamposDescriptivosJson,
 } from "@/lib/kanban/financial-analysis";
 import type { KanbanCardRow } from "@/lib/kanban/types";
+import {
+  isTodoChile,
+  type UbicacionChile,
+} from "@/lib/kanban/ubicaciones";
 import { formatMontoCLP } from "@/lib/montos";
+import { Trash2 } from "lucide-react";
 
 interface CardDetailPanelProps {
   card: KanbanCardRow;
@@ -37,7 +46,8 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
   const [error, setError] = useState<string | null>(null);
 
   const [estadoInterno, setEstadoInterno] = useState(card.estado_interno ?? "");
-  const [responsable, setResponsable] = useState(card.responsable ?? "");
+  const [responsableUserId, setResponsableUserId] = useState<string | null>(card.responsable_user_id ?? null);
+  const [responsableDisplay, setResponsableDisplay] = useState(card.responsable ?? "");
   const [fechaPostulacion, setFechaPostulacion] = useState(card.fecha_postulacion ?? "");
   const [fechasEjecucion, setFechasEjecucion] = useState(card.fechas_ejecucion ?? "");
   const [linkPropuesta, setLinkPropuesta] = useState(card.link_propuesta_tecnica ?? "");
@@ -48,6 +58,9 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
   const [analisisFinanciero, setAnalisisFinanciero] = useState(card.analisis_financiero ?? "");
   const [financiero, setFinanciero] = useState(card.analisis_financiero_json);
   const [descriptivos, setDescriptivos] = useState<CamposDescriptivosJson>(card.campos_descriptivos);
+  const [ubicaciones, setUbicaciones] = useState<UbicacionChile[]>(card.ubicaciones);
+  const [todoChile, setTodoChile] = useState(() => isTodoChile(card.ubicaciones));
+  const [activeTab, setActiveTab] = useState("detalle");
 
   const [contactoContraparte, setContactoContraparte] = useState(card.contacto.contacto_contraparte ?? "");
   const [contactoResponsable, setContactoResponsable] = useState(card.contacto.contacto_responsable ?? "");
@@ -58,8 +71,12 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
 
   useEffect(() => {
     setEstadoInterno(card.estado_interno ?? "");
+    setResponsableUserId(card.responsable_user_id ?? null);
+    setResponsableDisplay(card.responsable ?? "");
     setFinanciero(card.analisis_financiero_json);
     setDescriptivos(card.campos_descriptivos);
+    setUbicaciones(card.ubicaciones);
+    setTodoChile(isTodoChile(card.ubicaciones));
   }, [card]);
 
   const montoOfertadoNum = montoOfertado ? Number(montoOfertado.replace(/\D/g, "")) : null;
@@ -73,7 +90,7 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           estado_interno: estadoInterno.trim() || null,
-          responsable: responsable.trim() || null,
+          responsable_user_id: responsableUserId,
           fecha_postulacion: fechaPostulacion || null,
           fechas_ejecucion: fechasEjecucion.trim() || null,
           link_propuesta_tecnica: linkPropuesta.trim() || null,
@@ -82,6 +99,7 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
           analisis_financiero: analisisFinanciero.trim() || null,
           analisis_financiero_json: recalcularAnalisis(financiero, montoOfertadoNum),
           campos_descriptivos: descriptivos,
+          ubicaciones_json: ubicaciones,
           otec: {
             modalidad: descriptivos.modalidad,
             num_participantes: descriptivos.numParticipantes,
@@ -128,6 +146,30 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
     }
   }
 
+  function handleTodoChile(checked: boolean) {
+    setTodoChile(checked);
+    if (checked) {
+      setUbicaciones([{ ciudad_comuna: "Todo Chile", region: "Nacional" }]);
+    } else {
+      setUbicaciones([]);
+    }
+  }
+
+  function addUbicacion() {
+    if (todoChile) return;
+    setUbicaciones((prev) => [...prev, { ciudad_comuna: "", region: "" }]);
+  }
+
+  function updateUbicacion(index: number, patch: Partial<UbicacionChile>) {
+    setUbicaciones((prev) =>
+      prev.map((u, i) => (i === index ? { ...u, ...patch } : u))
+    );
+  }
+
+  function removeUbicacion(index: number) {
+    setUbicaciones((prev) => prev.filter((_, i) => i !== index));
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/50">
       <div className="flex h-full w-full max-w-2xl flex-col overflow-y-auto bg-background shadow-2xl">
@@ -140,13 +182,26 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
                 {tipoLabel(card.process.tipo)} · {KANBAN_COLUMN_LABELS[card.columna]}
               </p>
             </div>
-            <Button type="button" variant="ghost" size="sm" className="text-white hover:bg-white/10" onClick={onClose}>
-              Cerrar
-            </Button>
+            <div className="flex shrink-0 flex-col gap-1">
+              <Button type="button" variant="ghost" size="sm" className="text-[#d4a017] hover:bg-white/10" onClick={() => setActiveTab("backlog")}>
+                Backlog
+              </Button>
+              <Button type="button" variant="ghost" size="sm" className="text-white hover:bg-white/10" onClick={onClose}>
+                Cerrar
+              </Button>
+            </div>
           </div>
         </div>
 
-        <div className="space-y-6 px-4 py-4">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-1 flex-col">
+          <div className="border-b px-4 pt-2">
+            <TabsList className="w-full">
+              <TabsTrigger value="detalle" className="flex-1">Detalle</TabsTrigger>
+              <TabsTrigger value="backlog" className="flex-1">Backlog</TabsTrigger>
+            </TabsList>
+          </div>
+
+          <TabsContent value="detalle" className="space-y-6 px-4 py-4">
           <section className="brand-card space-y-2 p-3 text-sm">
             <p><span className="text-muted-foreground">Monto máximo MP:</span> <strong>{formatMontoCLP(card.process.monto_estimado)}</strong></p>
             <p>
@@ -156,6 +211,57 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
               <a href={card.process.url_publica} target="_blank" rel="noreferrer" className="text-[#d4a017] hover:underline">
                 Ver en Mercado Público →
               </a>
+            )}
+          </section>
+
+          <section className="space-y-3">
+            <h3 className="font-heading font-semibold text-[#11233d]">Lugar de ejecución</h3>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="todo-chile"
+                checked={todoChile}
+                onCheckedChange={(checked) => handleTodoChile(checked === true)}
+              />
+              <Label htmlFor="todo-chile" className="cursor-pointer text-sm">
+                Todo Chile
+              </Label>
+            </div>
+            {!todoChile && (
+              <div className="space-y-2">
+                {ubicaciones.map((u, i) => (
+                  <div key={i} className="grid gap-2 rounded border p-2 sm:grid-cols-[1fr_1fr_auto]">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Ciudad / comuna</Label>
+                      <Input
+                        value={u.ciudad_comuna}
+                        onChange={(e) => updateUbicacion(i, { ciudad_comuna: e.target.value })}
+                        placeholder="Ej: Santiago"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Región</Label>
+                      <Input
+                        value={u.region}
+                        onChange={(e) => updateUbicacion(i, { region: e.target.value })}
+                        placeholder="Ej: RM"
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="self-end text-muted-foreground hover:text-destructive"
+                      onClick={() => removeUbicacion(i)}
+                      aria-label="Eliminar ubicación"
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </div>
+                ))}
+                <Button type="button" size="sm" variant="outline" onClick={addUbicacion}>
+                  + Agregar
+                </Button>
+              </div>
             )}
           </section>
 
@@ -172,10 +278,14 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1">
-                <Label>Responsable interno</Label>
-                <Input value={responsable} onChange={(e) => setResponsable(e.target.value)} />
-              </div>
+              <TeamMemberSelect
+                value={responsableUserId}
+                displayName={responsableDisplay}
+                onChange={(userId, nombre) => {
+                  setResponsableUserId(userId);
+                  setResponsableDisplay(nombre ? `@${nombre}` : "");
+                }}
+              />
               <div className="space-y-1">
                 <Label>Fecha postulación</Label>
                 <Input type="date" value={fechaPostulacion} onChange={(e) => setFechaPostulacion(e.target.value)} />
@@ -287,7 +397,12 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
           </section>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
-        </div>
+          </TabsContent>
+
+          <TabsContent value="backlog" className="px-4 py-4">
+            <CardBacklogPanel card={card} onUpdated={onUpdated} />
+          </TabsContent>
+        </Tabs>
 
         <div className="sticky bottom-0 flex flex-col gap-2 border-t bg-background px-4 py-3">
           {!card.process.adjudicado_a_mi && (

@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { SessionActivity } from "@/components/auth/session-activity";
 import { AppNav } from "@/components/layout/app-nav";
 import { getSessionUser } from "@/lib/auth/session";
 import { getUnreadCount } from "@/lib/notifications/queries";
@@ -11,20 +12,22 @@ export async function AppHeader() {
   let userName: string | undefined;
 
   try {
-    unreadCount = await getUnreadCount();
+    const session = await getSessionUser();
+    unreadCount = await getUnreadCount(session);
     const status = await getOnboardingStatus();
     fantasyName =
       status.organization?.nombre_fantasia?.trim() ||
       status.organization?.name?.trim() ||
       undefined;
-    const session = await getSessionUser();
     userName = session?.nombre;
   } catch {
     unreadCount = 0;
   }
 
   return (
-    <header className="brand-header sticky top-0 z-20 shadow-lg">
+    <>
+      <SessionActivity />
+      <header className="brand-header sticky top-0 z-20 shadow-lg">
       <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-4 py-3 sm:px-6">
         <Link href="/" className="flex shrink-0 items-center gap-3">
           <Image
@@ -45,6 +48,7 @@ export async function AppHeader() {
         <AppNav unreadCount={unreadCount} userName={userName} />
       </div>
     </header>
+    </>
   );
 }
 

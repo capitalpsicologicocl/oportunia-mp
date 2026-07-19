@@ -93,11 +93,23 @@ export interface ViaticosLinea extends TrasladoDiarioBase {
   detalles: DetalleViatico[];
 }
 
+export interface DetalleCoffee {
+  periodo: "am" | "pm";
+  cantidad: number | null;
+  descripcion: string | null;
+  valorUnitario: number | null;
+  incluyeIva: boolean;
+  ivaPct: number;
+}
+
+export interface CoffeeLinea extends LineaConIva {
+  detalles: DetalleCoffee[];
+}
+
 export interface AnalisisFinancieroJson {
   relatores: RelatoresLinea;
   arriendo: ArriendoLinea;
-  coffeeAm: LineaConIva;
-  coffeePm: LineaConIva;
+  coffee: CoffeeLinea;
   almuerzo: LineaConIva;
   trasladoIda: TrasladoPersonasLinea;
   trasladoRegreso: TrasladoPersonasLinea;
@@ -131,6 +143,29 @@ export function emptyItemTabla(): ItemTabla {
   return { descripcion: "", precioUnitario: null, cantidad: null, subtotal: null };
 }
 
+export function emptyDetalleCoffee(periodo: "am" | "pm" = "am"): DetalleCoffee {
+  return {
+    periodo,
+    cantidad: null,
+    descripcion: null,
+    valorUnitario: null,
+    incluyeIva: false,
+    ivaPct: IVA_DEFAULT,
+  };
+}
+
+export function emptyCoffeeLinea(): CoffeeLinea {
+  return {
+    valorUnitarioSinIva: null,
+    ivaPct: IVA_DEFAULT,
+    cantidad: null,
+    subtotal: null,
+    detalleNotas: null,
+    detalleProveedor: null,
+    detalles: [],
+  };
+}
+
 export function emptyTrasladoPersonas(): TrasladoPersonasLinea {
   return { numPersonas: null, subtotal: null, detalles: [emptyDetalleTrasladoLargo()] };
 }
@@ -157,8 +192,7 @@ export function emptyAnalisisFinanciero(): AnalisisFinancieroJson {
       subtotal: null,
     },
     arriendo: { precioDiarioSinIva: null, ivaPct: IVA_DEFAULT, numDias: null, total: null },
-    coffeeAm: { valorUnitarioSinIva: null, ivaPct: IVA_DEFAULT, cantidad: null, subtotal: null, detalleNotas: null, detalleProveedor: null },
-    coffeePm: { valorUnitarioSinIva: null, ivaPct: IVA_DEFAULT, cantidad: null, subtotal: null, detalleNotas: null, detalleProveedor: null },
+    coffee: emptyCoffeeLinea(),
     almuerzo: { valorUnitarioSinIva: null, ivaPct: IVA_DEFAULT, cantidad: null, subtotal: null, detalleNotas: null, detalleProveedor: null },
     trasladoIda: emptyTrasladoPersonas(),
     trasladoRegreso: emptyTrasladoPersonas(),
@@ -194,6 +228,21 @@ export function calcLineaConIvaSubtotal(l: LineaConIva): number {
   return neto * (1 + n(l.ivaPct) / 100);
 }
 
+export function calcDetalleCoffeeSubtotal(d: DetalleCoffee): number {
+  const qty = n(d.cantidad);
+  const valor = n(d.valorUnitario);
+  if (qty === 0 || valor === 0) return 0;
+  if (d.incluyeIva) return qty * valor;
+  return qty * valor * (1 + n(d.ivaPct) / 100);
+}
+
+export function calcCoffeeSubtotal(coffee: CoffeeLinea): number {
+  if (coffee.detalles.length > 0) {
+    return coffee.detalles.reduce((sum, d) => sum + calcDetalleCoffeeSubtotal(d), 0);
+  }
+  return calcLineaConIvaSubtotal(coffee);
+}
+
 export function calcTrasladoPersonasSubtotal(line: TrasladoPersonasLinea): number {
   const fromDetails = line.detalles.reduce((sum, d) => sum + n(d.monto), 0);
   const unit = fromDetails > 0 ? fromDetails : n(line.subtotal);
@@ -203,7 +252,11 @@ export function calcTrasladoPersonasSubtotal(line: TrasladoPersonasLinea): numbe
 
 export function calcTrasladoDiarioSubtotal(line: TrasladoDiarioBase & { detalles: Array<{ monto?: number | null }> }): number {
   const fromDetails = line.detalles.reduce((sum, d) => sum + n(d.monto), 0);
-  if (fromDetails > 0) return fromDetails;
+  if (fromDetails > 0) {
+    const dias = Math.max(n(line.numDias), 1);
+    const relatores = Math.max(n(line.numRelatores), 1);
+    return fromDetails * dias * relatores;
+  }
   return n(line.subtotal);
 }
 
@@ -214,8 +267,7 @@ export function recalcularAnalisis(
   const next = structuredClone(data);
   next.relatores.subtotal = calcRelatoresSubtotal(next.relatores);
   next.arriendo.total = calcArriendoTotal(next.arriendo);
-  next.coffeeAm.subtotal = calcLineaConIvaSubtotal(next.coffeeAm);
-  next.coffeePm.subtotal = calcLineaConIvaSubtotal(next.coffeePm);
+  next.coffee.subtotal = calcCoffeeSubtotal(next.coffee);
   next.almuerzo.subtotal = calcLineaConIvaSubtotal(next.almuerzo);
   next.trasladoIda.subtotal = calcTrasladoPersonasSubtotal(next.trasladoIda);
   next.trasladoRegreso.subtotal = calcTrasladoPersonasSubtotal(next.trasladoRegreso);
@@ -243,8 +295,7 @@ export function totalCostos(data: AnalisisFinancieroJson): number {
   return (
     n(data.relatores.subtotal) +
     n(data.arriendo.total) +
-    n(data.coffeeAm.subtotal) +
-    n(data.coffeePm.subtotal) +
+    n(data.coffee.subtotal) +
     n(data.almuerzo.subtotal) +
     n(data.trasladoIda.subtotal) +
     n(data.trasladoRegreso.subtotal) +
@@ -266,21 +317,74 @@ function mergeLinea<T extends object>(base: T, partial?: object): T {
   return partial ? { ...base, ...partial } : base;
 }
 
+function legacyLineaToDetalleCoffee(line: LineaConIva, periodo: "am" | "pm"): DetalleCoffee | null {
+  const hasData =
+    line.cantidad != null ||
+    line.valorUnitarioSinIva != null ||
+    line.detalleNotas ||
+    line.detalleProveedor;
+  if (!hasData) return null;
+  return {
+    periodo,
+    cantidad: line.cantidad,
+    descripcion: line.detalleNotas,
+    valorUnitario: line.valorUnitarioSinIva,
+    incluyeIva: false,
+    ivaPct: line.ivaPct ?? IVA_DEFAULT,
+  };
+}
+
+function parseCoffeeLinea(obj: Record<string, unknown>): CoffeeLinea {
+  const base = emptyCoffeeLinea();
+
+  if (obj.coffee && typeof obj.coffee === "object") {
+    const coffeeObj = obj.coffee as Record<string, unknown>;
+    const merged = mergeLinea(base, coffeeObj);
+    const detallesRaw = coffeeObj.detalles;
+    merged.detalles = Array.isArray(detallesRaw)
+      ? (detallesRaw as DetalleCoffee[]).map((d) => ({
+          ...emptyDetalleCoffee(d.periodo ?? "am"),
+          ...d,
+          ivaPct: d.ivaPct ?? IVA_DEFAULT,
+        }))
+      : [];
+    return merged;
+  }
+
+  const legacyAm = obj.coffeeAm as LineaConIva | undefined;
+  const legacyPm = obj.coffeePm as LineaConIva | undefined;
+  const detalles: DetalleCoffee[] = [];
+
+  if (legacyAm) {
+    const d = legacyLineaToDetalleCoffee({ ...base, ...legacyAm }, "am");
+    if (d) detalles.push(d);
+  }
+  if (legacyPm) {
+    const d = legacyLineaToDetalleCoffee({ ...base, ...legacyPm }, "pm");
+    if (d) detalles.push(d);
+  }
+
+  const firstLegacy = legacyAm ?? legacyPm;
+  return {
+    ...base,
+    ...(firstLegacy ?? {}),
+    detalles,
+    detalleNotas: firstLegacy?.detalleNotas ?? null,
+    detalleProveedor: firstLegacy?.detalleProveedor ?? null,
+  };
+}
+
 export function parseAnalisisFinanciero(raw: unknown): AnalisisFinancieroJson {
   const base = emptyAnalisisFinanciero();
   if (!raw || typeof raw !== "object") return base;
   const obj = raw as Record<string, unknown>;
-
-  const legacyPasajes = obj.pasajes as { monto?: number } | undefined;
-  const legacyLocales = obj.trasladosLocales as { monto?: number } | undefined;
 
   return recalcularAnalisis(
     {
       ...base,
       relatores: mergeLinea(base.relatores, obj.relatores as object),
       arriendo: mergeLinea(base.arriendo, obj.arriendo as object),
-      coffeeAm: mergeLinea(base.coffeeAm, obj.coffeeAm as object),
-      coffeePm: mergeLinea(base.coffeePm, obj.coffeePm as object),
+      coffee: parseCoffeeLinea(obj),
       almuerzo: mergeLinea(base.almuerzo, obj.almuerzo as object),
       trasladoIda: mergeLinea(base.trasladoIda, obj.trasladoIda as object),
       trasladoRegreso: mergeLinea(base.trasladoRegreso, obj.trasladoRegreso as object),

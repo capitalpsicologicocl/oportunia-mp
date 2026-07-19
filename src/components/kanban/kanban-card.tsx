@@ -8,6 +8,7 @@ import { MpEstadoBadge } from "@/lib/dashboard/mp-estado-badge";
 import { formatFechaCL, formatHora, tipoLabel } from "@/lib/dashboard/format";
 import { formatMontoCLP } from "@/lib/montos";
 import { ingresoNeto, totalCostos } from "@/lib/kanban/financial-analysis";
+import { formatUbicacionCardSummary } from "@/lib/kanban/ubicaciones";
 import type { KanbanCardRow } from "@/lib/kanban/types";
 import { Button } from "@/components/ui/button";
 
@@ -104,9 +105,21 @@ export function KanbanCardPreview({
         </button>
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex items-start justify-between gap-2">
-            <button type="button" onClick={onOpen} className="font-mono text-[10px] text-muted-foreground hover:underline">
-              {p.codigo_externo}
-            </button>
+            <div className="min-w-0 flex-1">
+              <button type="button" onClick={onOpen} className="font-mono text-[10px] text-muted-foreground hover:underline">
+                {p.codigo_externo}
+              </button>
+              {p.organismo_nombre && (
+                <p className="truncate text-[10px] text-muted-foreground" title={p.organismo_nombre}>
+                  {p.organismo_nombre}
+                </p>
+              )}
+              {card.ubicaciones.length > 0 && (
+                <p className="text-[10px] text-[#11233d]/70">
+                  {formatUbicacionCardSummary(card.ubicaciones)}
+                </p>
+              )}
+            </div>
             <div className="flex shrink-0 items-center gap-0.5">
               {onRemove && (
                 <Button
@@ -160,8 +173,8 @@ export function KanbanCardPreview({
                 </span>
               )}
               {card.responsable && (
-                <span className="rounded-full border px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                  {card.responsable}
+                <span className="rounded-full border border-[#d4a017]/40 px-1.5 py-0.5 text-[10px] text-[#11233d]">
+                  {card.responsable.startsWith("@") ? card.responsable : `@${card.responsable}`}
                 </span>
               )}
             </div>

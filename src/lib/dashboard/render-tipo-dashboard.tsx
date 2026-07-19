@@ -13,6 +13,7 @@ import { getDashboardProcesses, type DashboardSort } from "@/lib/dashboard/get-p
 import { getMpSyncStatusForScope } from "@/lib/dashboard/sync-status-scope";
 import { maybeRefreshSearchProcess } from "@/lib/ingest/service";
 import { deleteEstadoCambioNotifications } from "@/lib/notifications/create";
+import { getSessionUser } from "@/lib/auth/session";
 import { getUnreadCount } from "@/lib/notifications/queries";
 import { getOnboardingStatus } from "@/lib/onboarding/status";
 import type { DashboardCrmFilter } from "@/lib/dashboard/get-processes";
@@ -87,6 +88,7 @@ export async function renderTipoDashboard({
   await deleteEstadoCambioNotifications().catch(() => undefined);
 
   const scope = tipo === "compra_agil" ? "compra_agil" : "licitacion";
+  const session = await getSessionUser();
 
   const [dashboard, unreadCount, syncStatus] = await Promise.all([
     getDashboardProcesses({
@@ -99,7 +101,7 @@ export async function renderTipoDashboard({
       page,
       sort,
     }),
-    getUnreadCount(),
+    getUnreadCount(session),
     getMpSyncStatusForScope(scope),
   ]);
 
