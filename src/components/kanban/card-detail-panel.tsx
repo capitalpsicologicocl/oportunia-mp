@@ -196,7 +196,7 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
               </p>
             </div>
             <div className="flex shrink-0 flex-col gap-1">
-              <Button type="button" variant="ghost" size="sm" className="text-[#d4a017] hover:bg-white/10" onClick={() => setActiveTab("backlog")}>
+              <Button type="button" variant="brand" size="sm" onClick={() => setActiveTab("backlog")}>
                 Backlog
               </Button>
               <Button type="button" variant="ghost" size="sm" className="text-white hover:bg-white/10" onClick={onClose}>
