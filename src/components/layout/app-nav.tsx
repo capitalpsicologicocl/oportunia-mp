@@ -2,12 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, Menu } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const NAV_ITEMS = [
+const PRIMARY_NAV = [
   { href: "/compra-agil", label: "Compra Ágil" },
   { href: "/licitaciones", label: "Licitaciones" },
   { href: "/kanban", label: "Kanban" },
+] as const;
+
+const MORE_NAV = [
   { href: "/historial", label: "Historial" },
   { href: "/bandeja", label: "Bandeja" },
   { href: "/crm/archivo", label: "Archivo CRM" },
@@ -21,6 +26,15 @@ function isNavActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+function navLinkClass(active: boolean): string {
+  return cn(
+    "relative whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-all",
+    active
+      ? "bg-[#d4a017] text-[#11233d] shadow-sm"
+      : "text-white/90 hover:bg-white/15 hover:text-white"
+  );
+}
+
 export function AppNav({
   unreadCount,
   userName,
@@ -29,37 +43,74 @@ export function AppNav({
   userName?: string;
 }) {
   const pathname = usePathname();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const moreActive = MORE_NAV.some((item) => isNavActive(pathname, item.href));
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   return (
-    <nav className="flex flex-wrap items-center gap-1.5">
-      {NAV_ITEMS.map((item) => {
-        const active = isNavActive(pathname, item.href);
+    <nav className="flex shrink-0 items-center gap-1">
+      {PRIMARY_NAV.map((item) => (
+        <Link key={item.href} href={item.href} className={navLinkClass(isNavActive(pathname, item.href))}>
+          {item.label}
+        </Link>
+      ))}
 
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            className={cn(
-              "relative rounded-lg px-3.5 py-2 text-sm font-medium transition-all",
-              active
-                ? "bg-[#d4a017] text-[#11233d] shadow-sm"
-                : "text-white/90 hover:bg-white/15 hover:text-white"
-            )}
-          >
-            {item.label}
-            {item.href === "/bandeja" && unreadCount > 0 && (
-              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white">
-                {unreadCount > 99 ? "99+" : unreadCount}
-              </span>
-            )}
-          </Link>
-        );
-      })}
+      <div className="relative" ref={menuRef}>
+        <button
+          type="button"
+          onClick={() => setMenuOpen((open) => !open)}
+          className={cn(
+            "inline-flex items-center gap-1 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-all",
+            moreActive || menuOpen
+              ? "bg-white/15 text-white"
+              : "text-white/90 hover:bg-white/15 hover:text-white"
+          )}
+          aria-expanded={menuOpen}
+          aria-haspopup="menu"
+        >
+          <Menu className="size-4" />
+          Más
+          <ChevronDown className={cn("size-3.5 transition-transform", menuOpen && "rotate-180")} />
+        </button>
+
+        {menuOpen && (
+          <div className="absolute right-0 top-full z-30 mt-1 min-w-[160px] rounded-lg border border-white/10 bg-[#11233d] py-1 shadow-xl">
+            {MORE_NAV.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => setMenuOpen(false)}
+                className={cn(
+                  "relative block px-4 py-2 text-sm transition-colors hover:bg-white/10",
+                  isNavActive(pathname, item.href) ? "bg-[#d4a017]/20 text-[#d4a017]" : "text-white/90"
+                )}
+              >
+                {item.label}
+                {item.href === "/bandeja" && unreadCount > 0 && (
+                  <span className="ml-2 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white">
+                    {unreadCount > 99 ? "99+" : unreadCount}
+                  </span>
+                )}
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
 
       <Link
         href="/perfil"
         className={cn(
-          "ml-1 flex items-center gap-2 rounded-lg border border-white/20 px-3 py-2 text-sm font-medium transition-all",
+          "ml-1 flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-white/20 px-3 py-2 text-sm font-medium transition-all",
           pathname === "/perfil"
             ? "border-[#d4a017] bg-[#d4a017]/20 text-white"
             : "text-white/90 hover:border-white/40 hover:bg-white/10 hover:text-white"
@@ -68,7 +119,7 @@ export function AppNav({
         <span className="flex size-6 items-center justify-center rounded-full bg-[#d4a017] text-xs font-bold text-[#11233d]">
           {(userName?.[0] ?? "U").toUpperCase()}
         </span>
-        <span className="hidden max-w-[120px] truncate sm:inline">{userName ?? "Perfil"}</span>
+        <span className="hidden max-w-[140px] truncate lg:inline">{userName ?? "Perfil"}</span>
       </Link>
     </nav>
   );

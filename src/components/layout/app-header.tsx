@@ -25,7 +25,7 @@ export async function AppHeader() {
 
   return (
     <header className="brand-header sticky top-0 z-20 shadow-lg">
-      <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+      <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-4 py-3 sm:px-6">
         <Link href="/" className="flex shrink-0 items-center gap-3">
           <Image
             src="/oportunia-logo.png"

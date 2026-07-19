@@ -88,7 +88,7 @@ export function DashboardFilters({
             <Label>Estado CRM</Label>
             <Select value={crm} onValueChange={(v) => updateParams({ crm: v ?? "all" })}>
               <SelectTrigger className="w-[190px]">
-                <SelectValue />
+                <SelectValue>{crm === "all" ? "Todos" : crmFilterLabel(crm)}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos</SelectItem>

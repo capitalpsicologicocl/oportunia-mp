@@ -29,17 +29,20 @@ import { formatMontoCLP } from "@/lib/montos";
 import { CRM_ROW_CLASS } from "@/lib/dashboard/crm-styles";
 import type { KanbanColumna } from "@/types/database";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 function SortHeader({
   label,
   field,
   current,
   onSort,
+  className,
 }: {
   label: string;
   field: DashboardSort;
   current: DashboardSort;
   onSort: (s: DashboardSort) => void;
+  className?: string;
 }) {
   const base = field.replace(/_(asc|desc)$/, "");
   const currentBase = current.replace(/_(asc|desc)$/, "");
@@ -51,7 +54,10 @@ function SortHeader({
     <button
       type="button"
       onClick={() => onSort(active && current.endsWith("_asc") ? desc : asc)}
-      className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-[#11233d] hover:text-[#d4a017]"
+      className={cn(
+        "inline-flex w-full items-center justify-center gap-0.5 text-[10px] font-semibold text-[#11233d] hover:text-[#d4a017]",
+        className
+      )}
     >
       {label}
       {!active ? (
@@ -90,6 +96,7 @@ export function ProcessTableClient({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [revisionMap, setRevisionMap] = useState<Record<string, ProcesoEstadoRevision>>({});
   const [updating, setUpdating] = useState(false);
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
 
   const pageIds = useMemo(() => processes.map((p) => p.id), [processes]);
   const allSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
@@ -146,6 +153,42 @@ export function ProcessTableClient({
     }
   }
 
+  async function markReviewed(processId: string) {
+    setRowBusy(processId);
+    try {
+      const res = await fetch("/api/processes/revision", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [processId], estado: "revisada" }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Error");
+      setRevisionMap((prev) => ({ ...prev, [processId]: "revisada" }));
+    } catch {
+      alert("No se pudo marcar como revisada.");
+    } finally {
+      setRowBusy(null);
+    }
+  }
+
+  async function discardToHistorial(processId: string) {
+    setRowBusy(processId);
+    try {
+      const res = await fetch("/api/processes/discard-dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [processId] }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Error");
+      router.refresh();
+    } catch {
+      alert("No se pudo enviar al historial.");
+    } finally {
+      setRowBusy(null);
+    }
+  }
+
   if (processes.length === 0) {
     return (
       <div className="brand-card p-12 text-center text-muted-foreground">
@@ -195,29 +238,30 @@ export function ProcessTableClient({
         <Table className="table-fixed text-[11px]">
           <TableHeader>
             <TableRow className="bg-[#11233d]/5 hover:bg-[#11233d]/5">
-              <TableHead className="w-[3%] px-1">
+              <TableHead className="w-[3%] px-1 text-center">
                 <Checkbox
                   checked={allSelected}
                   onCheckedChange={(checked) => toggleAll(checked === true)}
                   aria-label="Seleccionar todas"
                 />
               </TableHead>
-              <TableHead className={`${showTipoColumn ? "w-[11%]" : "w-[10%]"} px-2`}>Código</TableHead>
-              <TableHead className={`${showTipoColumn ? "w-[28%]" : "w-[29%]"} px-2`}>Nombre</TableHead>
-              {showTipoColumn && <TableHead className="w-[8%] px-2">Tipo</TableHead>}
-              <TableHead className={`${showTipoColumn ? "w-[9%]" : "w-[10%]"} px-2 text-right`}>
+              <TableHead className={`${showTipoColumn ? "w-[10%]" : "w-[9%]"} px-2 text-center`}>Código</TableHead>
+              <TableHead className={`${showTipoColumn ? "w-[22%]" : "w-[23%]"} px-2 text-center`}>Nombre</TableHead>
+              <TableHead className="w-[5%] px-1 text-center">Rev.</TableHead>
+              {showTipoColumn && <TableHead className="w-[7%] px-2 text-center">Tipo</TableHead>}
+              <TableHead className={`${showTipoColumn ? "w-[8%]" : "w-[9%]"} px-2 text-center`}>
                 <SortHeader label="Monto" field="monto_asc" current={sort} onSort={applySort} />
               </TableHead>
-              <TableHead className="w-[7%] px-2">
+              <TableHead className="w-[6%] px-2 text-center">
                 <SortHeader label="Pub." field="publicacion_desc" current={sort} onSort={applySort} />
               </TableHead>
-              <TableHead className="w-[5%] px-1">Hr. Pub.</TableHead>
-              <TableHead className="w-[7%] px-2">
+              <TableHead className="w-[5%] px-1 text-center">Hr. Pub.</TableHead>
+              <TableHead className="w-[6%] px-2 text-center">
                 <SortHeader label="Cierre" field="cierre_asc" current={sort} onSort={applySort} />
               </TableHead>
-              <TableHead className="w-[5%] px-1">Hr. Cierre</TableHead>
-              <TableHead className="w-[7%] px-1">Estado</TableHead>
-              <TableHead className={`${showTipoColumn ? "w-[9%]" : "w-[10%]"} px-1`}>CRM</TableHead>
+              <TableHead className="w-[5%] px-1 text-center">Hr. Cierre</TableHead>
+              <TableHead className="w-[7%] px-1 text-center">Estado</TableHead>
+              <TableHead className={`${showTipoColumn ? "w-[9%]" : "w-[10%]"} px-1 text-center`}>CRM</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -261,7 +305,7 @@ export function ProcessTableClient({
                   </TableCell>
                   <TableCell className="px-2">
                     <HoverTooltip text={p.nombre}>
-                      <p className={`line-clamp-2 cursor-help text-[11px] leading-tight ${textClass}`}>
+                      <p className={`line-clamp-2 cursor-help text-center text-[11px] leading-tight ${textClass}`}>
                         {p.nombre}
                       </p>
                     </HoverTooltip>
@@ -271,37 +315,65 @@ export function ProcessTableClient({
                       </Badge>
                     )}
                   </TableCell>
+                  <TableCell className="px-1">
+                    <div className="flex flex-col items-center gap-0.5">
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        className="h-5 min-w-[2rem] px-1 text-[9px] font-semibold"
+                        disabled={rowBusy === p.id || revision === "revisada"}
+                        title="Marcar como revisada"
+                        onClick={() => markReviewed(p.id)}
+                      >
+                        REV
+                      </Button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        className="h-5 min-w-[2rem] px-1 text-[9px] font-semibold hover:border-destructive hover:text-destructive"
+                        disabled={rowBusy === p.id}
+                        title="Descartar al historial"
+                        onClick={() => discardToHistorial(p.id)}
+                      >
+                        DESC
+                      </Button>
+                    </div>
+                  </TableCell>
                   {showTipoColumn && (
-                    <TableCell className="truncate px-2 text-[10px]">{tipoLabel(p.tipo)}</TableCell>
+                    <TableCell className="truncate px-2 text-center text-[10px]">{tipoLabel(p.tipo)}</TableCell>
                   )}
-                  <TableCell className="truncate px-2 text-right text-[10px] font-medium">
+                  <TableCell className="truncate px-2 text-center text-[10px] font-medium">
                     {formatMontoCLP(p.monto_estimado)}
                   </TableCell>
-                  <TableCell className="truncate px-2 text-[10px]">
+                  <TableCell className="truncate px-2 text-center text-[10px]">
                     {formatFechaCL(p.fecha_publicacion)}
                   </TableCell>
-                  <TableCell className="truncate px-2 text-[10px] text-muted-foreground">
+                  <TableCell className="truncate px-2 text-center text-[10px] text-muted-foreground">
                     {formatHora(p.hora_publicacion)}
                   </TableCell>
-                  <TableCell className="truncate px-2 text-[10px]">
+                  <TableCell className="truncate px-2 text-center text-[10px]">
                     {formatFechaCL(p.fecha_cierre)}
                   </TableCell>
-                  <TableCell className="truncate px-2 text-[10px] text-muted-foreground">
+                  <TableCell className="truncate px-2 text-center text-[10px] text-muted-foreground">
                     {formatHora(p.hora_cierre)}
                   </TableCell>
                   <TableCell
-                    className="truncate px-1 text-[10px] text-muted-foreground"
+                    className="truncate px-1 text-center text-[10px] text-muted-foreground"
                     title={p.estado ?? undefined}
                   >
                     {p.estado ?? "—"}
                   </TableCell>
                   <TableCell className="px-1 align-top">
-                    <ProcessCrmCell
-                      processId={p.id}
-                      codigoExterno={p.codigo_externo}
-                      enCrm={p.en_crm}
-                      crmColumna={p.crm_columna}
-                    />
+                    <div className="flex justify-center">
+                      <ProcessCrmCell
+                        processId={p.id}
+                        codigoExterno={p.codigo_externo}
+                        enCrm={p.en_crm}
+                        crmColumna={p.crm_columna}
+                      />
+                    </div>
                   </TableCell>
                 </TableRow>
               );

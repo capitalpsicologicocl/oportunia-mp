@@ -621,7 +621,7 @@ async function filterCandidatesNeedingSync(
   const { data: rows } = await supabase
     .from("processes")
     .select(
-      "id, codigo_externo, last_synced_at, hora_publicacion, hora_cierre, tipo, estado, adjudicado_a_mi, adjudicado_rut, fecha_cierre"
+      "id, codigo_externo, last_synced_at, hora_publicacion, hora_cierre, tipo, estado, adjudicado_a_mi, adjudicado_rut, fecha_cierre, dashboard_archived_at"
     )
     .eq("organization_id", DEFAULT_ORG_ID)
     .in("codigo_externo", codes);
@@ -652,6 +652,7 @@ async function filterCandidatesNeedingSync(
         adjudicado_a_mi: r.adjudicado_a_mi as boolean,
         adjudicado_rut: r.adjudicado_rut as string | null,
         fecha_cierre: r.fecha_cierre as string | null,
+        dashboard_archived_at: r.dashboard_archived_at as string | null,
       },
     ])
   );
@@ -659,6 +660,8 @@ async function filterCandidatesNeedingSync(
   return candidates.filter((c) => {
     const row = byCode.get(c.codigo_externo);
     if (!row) return true;
+
+    if (options.light && row.dashboard_archived_at) return false;
 
     return processNeedsApiRefresh({
       estado: row.estado,

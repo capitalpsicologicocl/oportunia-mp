@@ -7,6 +7,7 @@ import { Archive, GripVertical, X } from "lucide-react";
 import { MpEstadoBadge } from "@/lib/dashboard/mp-estado-badge";
 import { formatFechaCL, formatHora, tipoLabel } from "@/lib/dashboard/format";
 import { formatMontoCLP } from "@/lib/montos";
+import { ingresoNeto, totalCostos } from "@/lib/kanban/financial-analysis";
 import type { KanbanCardRow } from "@/lib/kanban/types";
 import { Button } from "@/components/ui/button";
 
@@ -68,6 +69,8 @@ export function KanbanCardPreview({
 }) {
   const p = card.process;
   const actionDisabled = archiving || removing;
+  const costosTotal = totalCostos(card.analisis_financiero_json);
+  const utilidad = ingresoNeto(card.monto_ofertado, card.analisis_financiero_json);
 
   async function handleArchive(e: MouseEvent) {
     e.stopPropagation();
@@ -164,9 +167,17 @@ export function KanbanCardPreview({
             </div>
 
             {card.monto_ofertado != null && (
-              <p className="mt-2 text-xs font-semibold text-[#11233d]">
-                Oferta: {formatMontoCLP(card.monto_ofertado)}
-              </p>
+              <div className="mt-2 space-y-1">
+                <p className="text-xs font-semibold text-[#11233d]">
+                  Oferta: {formatMontoCLP(card.monto_ofertado)}
+                </p>
+                <div className="grid grid-cols-2 gap-1 text-[10px] text-muted-foreground">
+                  <span>Costos: {formatMontoCLP(costosTotal)}</span>
+                  <span>
+                    Utilidad: {utilidad != null ? formatMontoCLP(utilidad) : "—"}
+                  </span>
+                </div>
+              </div>
             )}
           </button>
         </div>

@@ -219,6 +219,10 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
                 <Input type="number" value={descriptivos.numRelatores ?? ""} onChange={(e) => setDescriptivos({ ...descriptivos, numRelatores: e.target.value ? Number(e.target.value) : null })} />
               </div>
               <div className="space-y-1">
+                <Label>Nº de versiones o grupos</Label>
+                <Input type="number" value={descriptivos.numVersionesGrupos ?? ""} onChange={(e) => setDescriptivos({ ...descriptivos, numVersionesGrupos: e.target.value ? Number(e.target.value) : null })} />
+              </div>
+              <div className="space-y-1">
                 <Label>Modalidad</Label>
                 <Select value={descriptivos.modalidad ?? "none"} onValueChange={(v) => setDescriptivos({ ...descriptivos, modalidad: v === "none" ? null : (v as CamposDescriptivosJson["modalidad"]) })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>

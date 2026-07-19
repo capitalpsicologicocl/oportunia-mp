@@ -140,6 +140,24 @@ export async function getDashboardArchiveCounts(): Promise<{ active: number; arc
   return { active: active ?? 0, archived: archived ?? 0 };
 }
 
+/** Descarte manual desde dashboard → historial (no Kanban). */
+export async function archiveProcessesToHistorial(processIds: string[]): Promise<number> {
+  if (!processIds.length) return 0;
+  const supabase = createServiceClient();
+  const now = new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from("processes")
+    .update({ dashboard_archived_at: now, updated_at: now })
+    .eq("organization_id", DEFAULT_ORG_ID)
+    .in("id", processIds)
+    .is("dashboard_archived_at", null)
+    .select("id");
+
+  if (error) throw new Error(error.message);
+  return data?.length ?? 0;
+}
+
 export async function restoreProcessesToDashboard(processIds: string[]): Promise<number> {
   if (!processIds.length) return 0;
   const supabase = createServiceClient();

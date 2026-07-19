@@ -309,6 +309,7 @@ export type EstadoInterno = (typeof ESTADOS_INTERNOS)[number];
 
 export interface CamposDescriptivosJson {
   numRelatores: number | null;
+  numVersionesGrupos: number | null;
   relatores: Array<{
     nombre: string;
     especialidad: string | null;
@@ -323,6 +324,7 @@ export interface CamposDescriptivosJson {
 export function emptyCamposDescriptivos(): CamposDescriptivosJson {
   return {
     numRelatores: null,
+    numVersionesGrupos: null,
     relatores: [{ nombre: "", especialidad: null, email: null, telefono: null }],
     modalidad: null,
     numParticipantes: null,
