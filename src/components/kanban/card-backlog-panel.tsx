@@ -245,14 +245,14 @@ function BacklogTable({
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
         <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
           <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[560px] text-sm">
+            <table className="w-full table-fixed text-sm">
               <thead>
                 <tr className="border-b bg-muted/30 text-left text-xs text-muted-foreground">
                   <th className="w-8 p-2" />
                   <th className="w-10 p-2" />
-                  <th className="p-2">Tarea</th>
-                  <th className="w-36 p-2">Fecha término</th>
-                  <th className="w-44 p-2">Responsable</th>
+                  <th className="min-w-[240px] p-2">Tarea</th>
+                  <th className="w-32 p-2">Fecha término</th>
+                  <th className="w-40 p-2">Responsable</th>
                   <th className="w-8 p-2" />
                 </tr>
               </thead>
@@ -321,7 +321,7 @@ function SortableBacklogRow({
       <td className="p-2 align-top">
         <Input
           value={item.titulo}
-          className={cn(completed && "line-through opacity-70")}
+          className={cn(completed && "line-through opacity-70", "min-w-0")}
           onChange={(e) => onUpdate(item.id, { titulo: e.target.value })}
         />
       </td>
@@ -341,7 +341,7 @@ function SortableBacklogRow({
           onChange={(userId, nombre) =>
             onUpdate(item.id, {
               responsable_user_id: userId,
-              responsable_display: nombre ? `@${nombre}` : null,
+              responsable_display: userId && nombre ? `@${nombre}` : nombre,
             })
           }
         />

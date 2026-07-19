@@ -84,7 +84,11 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
 
       if (nextUserId === null) {
         cardUpdate.responsable_user_id = null;
-        cardUpdate.responsable = null;
+        if (body.responsable !== undefined) {
+          cardUpdate.responsable = body.responsable?.trim() || null;
+        } else {
+          cardUpdate.responsable = null;
+        }
       } else {
         const { data: assignee, error: assigneeError } = await supabase
           .from("org_users")
@@ -120,7 +124,8 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         }
       }
     } else if (body.responsable !== undefined) {
-      cardUpdate.responsable = body.responsable;
+      cardUpdate.responsable = body.responsable?.trim() || null;
+      cardUpdate.responsable_user_id = null;
     }
 
     if (body.fecha_postulacion !== undefined) cardUpdate.fecha_postulacion = body.fecha_postulacion;

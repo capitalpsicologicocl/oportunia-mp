@@ -27,6 +27,7 @@ import {
 } from "@/lib/kanban/financial-analysis";
 import type { KanbanCardRow } from "@/lib/kanban/types";
 import {
+  formatUbicacionCardSummary,
   isTodoChile,
   type UbicacionChile,
 } from "@/lib/kanban/ubicaciones";
@@ -91,6 +92,7 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
         body: JSON.stringify({
           estado_interno: estadoInterno.trim() || null,
           responsable_user_id: responsableUserId,
+          responsable: responsableUserId ? undefined : responsableDisplay.trim() || null,
           fecha_postulacion: fechaPostulacion || null,
           fechas_ejecucion: fechasEjecucion.trim() || null,
           link_propuesta_tecnica: linkPropuesta.trim() || null,
@@ -172,14 +174,25 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/50">
-      <div className="flex h-full w-full max-w-2xl flex-col overflow-y-auto bg-background shadow-2xl">
+      <div className="flex h-full w-full max-w-4xl flex-col overflow-y-auto bg-background shadow-2xl">
         <div className="sticky top-0 z-10 border-b border-[#d4a017]/30 bg-[#11233d] px-4 py-4 text-white">
           <div className="flex items-start justify-between gap-3">
-            <div>
+            <div className="min-w-0 flex-1">
               <p className="font-mono text-xs text-[#d4a017]">{card.process.codigo_externo}</p>
               <h2 className="font-heading text-lg font-semibold leading-snug">{card.process.nombre}</h2>
-              <p className="text-sm text-white/70">
+              {(card.process.organismo_nombre || card.ubicaciones.length > 0 || card.process.lugar_ejecucion) && (
+                <p className="mt-1 text-sm text-white/85">
+                  {[
+                    card.process.organismo_nombre,
+                    formatUbicacionCardSummary(card.ubicaciones) || card.process.lugar_ejecucion,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              )}
+              <p className="mt-1 text-sm text-white/70">
                 {tipoLabel(card.process.tipo)} · {KANBAN_COLUMN_LABELS[card.columna]}
+                {card.estado_interno ? ` · ${card.estado_interno}` : ""}
               </p>
             </div>
             <div className="flex shrink-0 flex-col gap-1">
@@ -283,7 +296,13 @@ export function CardDetailPanel({ card, onClose, onUpdated, onDiscarded }: CardD
                 displayName={responsableDisplay}
                 onChange={(userId, nombre) => {
                   setResponsableUserId(userId);
-                  setResponsableDisplay(nombre ? `@${nombre}` : "");
+                  if (userId && nombre) {
+                    setResponsableDisplay(`@${nombre}`);
+                  } else if (!userId && nombre) {
+                    setResponsableDisplay(nombre);
+                  } else {
+                    setResponsableDisplay("");
+                  }
                 }}
               />
               <div className="space-y-1">
