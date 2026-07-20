@@ -190,14 +190,24 @@ async function enrichWithFullDetail(
 
 async function updateLastMpSyncAt(
   supabase: ReturnType<typeof createServiceClient>,
-  scope: Exclude<SyncScope, "all">
+  scope: Exclude<SyncScope, "all">,
+  source: "manual" | "cron" = "manual"
 ) {
   const col = scope === "compra_agil" ? "last_mp_sync_ca_at" : "last_mp_sync_lic_at";
+  const sourceCol =
+    scope === "compra_agil"
+      ? source === "cron"
+        ? "last_mp_sync_ca_cron_at"
+        : "last_mp_sync_ca_manual_at"
+      : source === "cron"
+        ? "last_mp_sync_lic_cron_at"
+        : "last_mp_sync_lic_manual_at";
   const now = new Date().toISOString();
   const { error } = await supabase
     .from("org_settings")
     .update({
       [col]: now,
+      [sourceCol]: now,
       last_mp_sync_at: now,
       updated_at: now,
     })
@@ -842,7 +852,7 @@ async function finalizeDashboardSync(
   }
 
   pending.finalized = true;
-  await updateLastMpSyncAt(supabase, scope);
+  await updateLastMpSyncAt(supabase, scope, pending.cron_run ? "cron" : "manual");
   await saveMpSyncPending(supabase, scope, null);
 
   const { archived } = await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }));
@@ -932,6 +942,7 @@ export async function runDashboardSyncBatch(
       );
       pending = discovered.pending;
       pending.ca_fetched = true;
+      pending.cron_run = cron;
       pending.errors = discoverErrors;
     }
     await saveMpSyncPending(supabase, scope, pending);

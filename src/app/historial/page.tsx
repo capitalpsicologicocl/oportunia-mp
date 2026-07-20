@@ -41,6 +41,8 @@ export default async function HistorialPage({ searchParams }: PageProps) {
 
   const page = Math.max(1, Number(param(params.page) ?? "1") || 1);
   const searchQ = param(params.q);
+  const region = param(params.region);
+  const organismo = param(params.organismo);
   const sortParam = param(params.sort);
   const sort: DashboardSort =
     sortParam === "cierre_asc" ||
@@ -57,6 +59,8 @@ export default async function HistorialPage({ searchParams }: PageProps) {
       q: searchQ,
       tipo,
       filtro,
+      region,
+      organismo,
       page,
       sort,
       archived: true,
@@ -121,7 +125,12 @@ export default async function HistorialPage({ searchParams }: PageProps) {
           </div>
         </div>
 
-        <DashboardFilters basePath="/historial" showCrmFilter={false} />
+        <DashboardFilters
+          basePath="/historial"
+          showCrmFilter={false}
+          regionOptions={dashboard.filterOptions.regiones}
+          organismoOptions={dashboard.filterOptions.organismos}
+        />
 
         <HistorialTable processes={dashboard.processes} />
 

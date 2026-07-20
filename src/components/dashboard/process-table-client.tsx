@@ -25,6 +25,7 @@ import type {
   ProcesoEstadoRevision,
   ProcessRow,
 } from "@/lib/dashboard/get-processes";
+import { formatOrganismoSubtitle } from "@/lib/dashboard/ubicacion-display";
 import { formatMontoCLP } from "@/lib/montos";
 import { CRM_ROW_CLASS } from "@/lib/dashboard/crm-styles";
 import type { KanbanColumna } from "@/types/database";
@@ -271,6 +272,10 @@ export function ProcessTableClient({
               const crmCol = (p.crm_columna ?? "preevaluacion") as KanbanColumna;
               const crmRowClass =
                 p.en_crm && !p.adjudicado_a_mi ? CRM_ROW_CLASS[crmCol] : undefined;
+              const organismoSubtitle = formatOrganismoSubtitle(
+                p.organismo_nombre,
+                p.lugar_ejecucion
+              );
 
               return (
                 <TableRow
@@ -309,6 +314,14 @@ export function ProcessTableClient({
                         {p.nombre}
                       </p>
                     </HoverTooltip>
+                    {organismoSubtitle && (
+                      <p
+                        className={`mt-0.5 line-clamp-1 text-center text-[9px] leading-tight text-muted-foreground ${revision === "descartada" ? "opacity-50" : ""}`}
+                        title={organismoSubtitle}
+                      >
+                        {organismoSubtitle}
+                      </p>
+                    )}
                     {p.adjudicado_a_mi && (
                       <Badge className="mt-0.5 bg-emerald-600 px-1 py-0 text-[9px] text-white">
                         Adjud. tuyo

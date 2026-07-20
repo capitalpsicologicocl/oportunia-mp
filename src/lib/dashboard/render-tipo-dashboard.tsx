@@ -84,6 +84,9 @@ export async function renderTipoDashboard({
       ? crmParam
       : "all";
 
+  const region = param(searchParams.region);
+  const organismo = param(searchParams.organismo);
+
   await maybeRefreshSearchProcess(searchQ);
   await deleteEstadoCambioNotifications().catch(() => undefined);
 
@@ -98,6 +101,8 @@ export async function renderTipoDashboard({
       filtro,
       adjudicadoAMi,
       crm: crm === "all" ? undefined : crm,
+      region,
+      organismo,
       page,
       sort,
     }),
@@ -136,12 +141,18 @@ export async function renderTipoDashboard({
           scope={scope}
           isFirstSync={syncStatus.isFirstSync}
           lastSyncLabel={syncStatus.lastSyncLabel}
+          lastManualSyncLabel={syncStatus.lastManualSyncLabel}
+          lastCronSyncLabel={syncStatus.lastCronSyncLabel}
         />
 
         {syncStatus.hasSyncedData && (
           <>
             <Suspense fallback={<div className="h-24 animate-pulse rounded-xl bg-muted" />}>
-              <DashboardFilters basePath={basePath} />
+              <DashboardFilters
+                basePath={basePath}
+                regionOptions={dashboard.filterOptions.regiones}
+                organismoOptions={dashboard.filterOptions.organismos}
+              />
             </Suspense>
 
             <Suspense fallback={<div className="h-64 animate-pulse rounded-xl bg-muted" />}>

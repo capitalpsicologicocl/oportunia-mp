@@ -2,6 +2,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { isExcluded, keywordMatchesInText, normalizeMatchText } from "@/lib/dashboard/content-match";
 import { looksLikeProcessCodigo } from "@/lib/dashboard/process-codigo";
 import { matchesRubrosUnspsc } from "@/lib/dashboard/unspsc-match";
+import { processMatchesRegion, processRegionCodes } from "@/lib/dashboard/ubicacion-display";
 import { matchesCrmFilter, type DashboardCrmFilterValue } from "@/lib/dashboard/crm-styles";
 import { unspscCodesForMatching } from "@/lib/onboarding/rubros-unspsc";
 import { DEFAULT_ORG_ID, type Postulabilidad, type ProcessTipo } from "@/types/database";
@@ -25,6 +26,8 @@ export interface DashboardFilters {
   adjudicadoAMi?: boolean;
   archived?: boolean;
   crm?: DashboardCrmFilter;
+  region?: string;
+  organismo?: string;
   page?: number;
   pageSize?: number;
   sort?: DashboardSort;
@@ -39,6 +42,7 @@ export interface ProcessRow {
   nombre: string;
   estado: string | null;
   organismo_nombre: string | null;
+  lugar_ejecucion: string | null;
   monto_estimado: number | null;
   monto_sospechoso: boolean;
   fecha_cierre: string | null;
@@ -65,6 +69,10 @@ export interface DashboardResult {
   totalPages: number;
   keywords: string[];
   rubros: Array<{ codigo_unspsc: string; nombre: string }>;
+  filterOptions: {
+    regiones: string[];
+    organismos: string[];
+  };
   stats: {
     totalEnBase: number;
     matchingFiltro: number;
@@ -200,6 +208,7 @@ export async function getDashboardProcesses(
       nombre,
       estado,
       organismo_nombre,
+      lugar_ejecucion,
       monto_estimado,
       monto_sospechoso,
       fecha_cierre,
@@ -248,6 +257,7 @@ export async function getDashboardProcesses(
     nombre: row.nombre,
     estado: row.estado,
     organismo_nombre: row.organismo_nombre,
+    lugar_ejecucion: row.lugar_ejecucion,
     monto_estimado: row.monto_estimado,
     monto_sospechoso: row.monto_sospechoso,
     fecha_cierre: row.fecha_cierre,
@@ -274,6 +284,32 @@ export async function getDashboardProcesses(
     en_crm: pipelineMap[row.id]?.en_pipeline ?? false,
     crm_columna: pipelineMap[row.id]?.columna ?? null,
   }));
+
+  const regionSet = new Set<string>();
+  const organismoSet = new Set<string>();
+  for (const row of rows) {
+    for (const code of processRegionCodes(row.lugar_ejecucion)) {
+      regionSet.add(code);
+    }
+    const org = row.organismo_nombre?.trim();
+    if (org) organismoSet.add(org);
+  }
+  const filterOptions = {
+    regiones: [...regionSet].sort((a, b) => a.localeCompare(b, "es")),
+    organismos: [...organismoSet].sort((a, b) => a.localeCompare(b, "es")),
+  };
+
+  if (filters.region?.trim()) {
+    const regionFilter = filters.region.trim();
+    rows = rows.filter((r) => processMatchesRegion(r.lugar_ejecucion, regionFilter));
+  }
+
+  if (filters.organismo?.trim()) {
+    const organismoFilter = filters.organismo.trim();
+    rows = rows.filter(
+      (r) => (r.organismo_nombre?.trim() ?? "") === organismoFilter
+    );
+  }
 
   if (filters.postulabilidad && filters.postulabilidad !== "all") {
     rows = rows.filter((r) => r.postulabilidad === filters.postulabilidad);
@@ -322,6 +358,7 @@ export async function getDashboardProcesses(
     totalPages,
     keywords,
     rubros,
+    filterOptions,
     stats: {
       totalEnBase: totalEnBase ?? 0,
       matchingFiltro: total,

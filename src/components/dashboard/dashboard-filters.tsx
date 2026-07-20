@@ -19,9 +19,13 @@ import { crmFilterLabel } from "@/lib/dashboard/crm-styles";
 export function DashboardFilters({
   basePath = "/",
   showCrmFilter = true,
+  regionOptions = [],
+  organismoOptions = [],
 }: {
   basePath?: string;
   showCrmFilter?: boolean;
+  regionOptions?: string[];
+  organismoOptions?: string[];
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -31,6 +35,8 @@ export function DashboardFilters({
   const filtro = searchParams.get("filtro") ?? "ambos";
   const adjudicadoAMi = searchParams.get("adjudicado") === "1";
   const crm = searchParams.get("crm") ?? "all";
+  const region = searchParams.get("region") ?? "all";
+  const organismo = searchParams.get("organismo") ?? "all";
 
   const updateParams = useCallback(
     (updates: Record<string, string>) => {
@@ -66,6 +72,45 @@ export function DashboardFilters({
               }
             }}
           />
+        </div>
+
+        <div className="space-y-1">
+          <Label>Región</Label>
+          <Select value={region} onValueChange={(v) => updateParams({ region: v ?? "all" })}>
+            <SelectTrigger className="w-[160px]">
+              <SelectValue>{region === "all" ? "Todas" : region}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas</SelectItem>
+              {regionOptions.map((r) => (
+                <SelectItem key={r} value={r}>
+                  {r}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1">
+          <Label>Organismo público</Label>
+          <Select
+            value={organismo}
+            onValueChange={(v) => updateParams({ organismo: v ?? "all" })}
+          >
+            <SelectTrigger className="w-[220px]">
+              <SelectValue>
+                {organismo === "all" ? "Todos" : organismo}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos</SelectItem>
+              {organismoOptions.map((o) => (
+                <SelectItem key={o} value={o}>
+                  {o}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="space-y-1">
@@ -149,6 +194,8 @@ export function DashboardFilters({
               : "todos los procesos importados"}
         {adjudicadoAMi ? " · solo adjudicados a ti" : ""}
         {showCrmFilter && crm !== "all" ? ` · CRM: ${crmFilterLabel(crm)}` : ""}
+        {region !== "all" ? ` · región: ${region}` : ""}
+        {organismo !== "all" ? ` · organismo: ${organismo}` : ""}
       </p>
     </div>
   );

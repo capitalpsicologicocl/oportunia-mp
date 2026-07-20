@@ -10,10 +10,14 @@ export function SyncMercadoPublicoButton({
   scope,
   isFirstSync: isFirstSyncProp,
   lastSyncLabel: lastSyncLabelProp,
+  lastManualSyncLabel: lastManualSyncLabelProp,
+  lastCronSyncLabel: lastCronSyncLabelProp,
 }: {
   scope: Exclude<SyncScope, "all">;
   isFirstSync?: boolean;
   lastSyncLabel?: string;
+  lastManualSyncLabel?: string;
+  lastCronSyncLabel?: string;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -23,23 +27,49 @@ export function SyncMercadoPublicoButton({
   const [syncMeta, setSyncMeta] = useState({
     isFirstSync: true,
     lastSyncLabel: "Nunca",
+    lastManualSyncLabel: "Nunca",
+    lastCronSyncLabel: "Nunca",
   });
 
   useEffect(() => {
-    if (isFirstSyncProp !== undefined && lastSyncLabelProp !== undefined) return;
+    if (
+      isFirstSyncProp !== undefined &&
+      lastSyncLabelProp !== undefined &&
+      lastManualSyncLabelProp !== undefined &&
+      lastCronSyncLabelProp !== undefined
+    ) {
+      return;
+    }
     fetch(`/api/ingest/sync-status?scope=${scope}`)
       .then((res) => res.json())
-      .then((data: { isFirstSync?: boolean; lastSyncLabel?: string }) => {
-        setSyncMeta({
-          isFirstSync: data.isFirstSync ?? true,
-          lastSyncLabel: data.lastSyncLabel ?? "Nunca",
-        });
-      })
+      .then(
+        (data: {
+          isFirstSync?: boolean;
+          lastSyncLabel?: string;
+          lastManualSyncLabel?: string;
+          lastCronSyncLabel?: string;
+        }) => {
+          setSyncMeta({
+            isFirstSync: data.isFirstSync ?? true,
+            lastSyncLabel: data.lastSyncLabel ?? "Nunca",
+            lastManualSyncLabel: data.lastManualSyncLabel ?? "Nunca",
+            lastCronSyncLabel: data.lastCronSyncLabel ?? "Nunca",
+          });
+        }
+      )
       .catch(() => undefined);
-  }, [isFirstSyncProp, lastSyncLabelProp, scope]);
+  }, [
+    isFirstSyncProp,
+    lastSyncLabelProp,
+    lastManualSyncLabelProp,
+    lastCronSyncLabelProp,
+    scope,
+  ]);
 
   const isFirstSync = isFirstSyncProp ?? syncMeta.isFirstSync;
   const lastSyncLabel = lastSyncLabelProp ?? syncMeta.lastSyncLabel;
+  const lastManualSyncLabel = lastManualSyncLabelProp ?? syncMeta.lastManualSyncLabel;
+  const lastCronSyncLabel = lastCronSyncLabelProp ?? syncMeta.lastCronSyncLabel;
 
   async function handleSync() {
     setLoading(true);
@@ -184,9 +214,21 @@ export function SyncMercadoPublicoButton({
         <Button type="button" variant="brand" size="sm" disabled={loading} onClick={handleSync}>
           {buttonLabel}
         </Button>
-        <p className="text-xs text-muted-foreground">
-          Última actualización: <strong className="text-foreground">{lastSyncLabel}</strong>
-        </p>
+        <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+          <p>
+            Última sync manual:{" "}
+            <strong className="text-foreground">{lastManualSyncLabel}</strong>
+          </p>
+          <p>
+            Última sync automática (00:01):{" "}
+            <strong className="text-foreground">{lastCronSyncLabel}</strong>
+          </p>
+          {!isFirstSync && (
+            <p className="text-[10px]">
+              Última actualización (cualquier origen): {lastSyncLabel}
+            </p>
+          )}
+        </div>
       </div>
       {progress && <p className="text-xs font-medium text-[#11233d]">{progress}</p>}
       {!isFirstSync && !loading && (
