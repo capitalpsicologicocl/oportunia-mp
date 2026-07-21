@@ -1,6 +1,7 @@
 "use client";
 
 import { mpEstadoDisplayLabel } from "@/lib/ingest/sync-refresh";
+import { effectiveMpEstadoDisplay } from "@/lib/dashboard/cierre-display";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
@@ -8,14 +9,21 @@ export function MpEstadoBadge({
   estado,
   adjudicadoAMi,
   adjudicadoRut,
+  fechaCierre,
+  horaCierre,
   className,
 }: {
   estado: string | null;
   adjudicadoAMi: boolean;
   adjudicadoRut?: string | null;
+  fechaCierre?: string | null;
+  horaCierre?: string | null;
   className?: string;
 }) {
-  const { label, tone } = mpEstadoDisplayLabel(estado, adjudicadoAMi, adjudicadoRut);
+  const { label, tone } =
+    fechaCierre !== undefined || horaCierre !== undefined
+      ? effectiveMpEstadoDisplay(estado, adjudicadoAMi, fechaCierre, horaCierre, adjudicadoRut)
+      : mpEstadoDisplayLabel(estado, adjudicadoAMi, adjudicadoRut);
 
   return (
     <Badge

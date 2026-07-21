@@ -124,7 +124,7 @@ export async function HomePage() {
             <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
               <li>· Filtro por keywords y rubros reales de tu empresa</li>
               <li>· Sync nocturno + manual por Compra Ágil / Licitaciones</li>
-              <li>· Historial para limpiar el dashboard sin perder trazabilidad</li>
+              <li>· Descartadas para limpiar el dashboard sin perder trazabilidad</li>
               <li>· Bandeja de adjudicaciones y cambios de estado</li>
               <li>· Una instancia = tu Supabase + tu deploy (datos aislados)</li>
             </ul>

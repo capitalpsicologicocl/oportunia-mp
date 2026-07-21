@@ -12,6 +12,7 @@ import { processNeedsApiRefresh, type SyncScope } from "@/lib/ingest/sync-refres
 import { DEFAULT_ORG_ID, type DashboardSyncBatchResult, type IngestSummary, type ProcessInsert, type ProcessTipo } from "@/types/database";
 import { parseMontoFromApi } from "@/lib/montos";
 import { createNotificationIfAbsent } from "@/lib/notifications/create";
+import { isPastCierre } from "@/lib/dashboard/cierre-display";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
   chileDateIso,
@@ -290,6 +291,7 @@ async function upsertProcess(
   options?: {
     notifyFilters?: Awaited<ReturnType<typeof loadOrgContentFilters>>;
     markDashboardSync?: boolean;
+    forceRefresh?: boolean;
   }
 ): Promise<"created" | "updated"> {
   const notifyFilters = options?.notifyFilters;
@@ -299,11 +301,15 @@ async function upsertProcess(
   const { data: existing } = await supabase
     .from("processes")
     .select(
-      "id, estado, content_hash, adjudicado_a_mi, nombre, servicios_requeridos, synced_via_dashboard, descripcion, tipo_detalle, monto_estimado, monto_raw_api, monto_sospechoso, organismo_nombre, organismo_rut, unidad_compra, lugar_ejecucion, fecha_publicacion, fecha_cierre, fecha_cierre_2, hora_publicacion, hora_cierre, hora_cierre_2, url_publica, adjudicado_rut, adjudicado_nombre, rubros_unspsc"
+      "id, estado, content_hash, adjudicado_a_mi, nombre, servicios_requeridos, synced_via_dashboard, descripcion, tipo_detalle, monto_estimado, monto_raw_api, monto_sospechoso, organismo_nombre, organismo_rut, unidad_compra, lugar_ejecucion, fecha_publicacion, fecha_cierre, fecha_cierre_2, hora_publicacion, hora_cierre, hora_cierre_2, url_publica, adjudicado_rut, adjudicado_nombre, rubros_unspsc, dashboard_archived_at"
     )
     .eq("organization_id", DEFAULT_ORG_ID)
     .eq("codigo_externo", normalized.codigo_externo)
     .maybeSingle();
+
+  if (existing?.dashboard_archived_at && !options?.forceRefresh) {
+    return "updated";
+  }
 
   const estadoFinal = mergeEstado(normalized.estado, existing?.estado);
 
@@ -671,7 +677,7 @@ async function filterCandidatesNeedingSync(
     const row = byCode.get(c.codigo_externo);
     if (!row) return true;
 
-    if (options.light && row.dashboard_archived_at) return false;
+    if (row.dashboard_archived_at) return false;
 
     return processNeedsApiRefresh({
       estado: row.estado,
@@ -840,7 +846,7 @@ async function finalizeDashboardSync(
     pending.updated += incomplete.refreshed;
     pending.errors.push(...incomplete.errors.slice(0, 2));
 
-    const stale = await refreshStaleProcesses(10, notifyFilters, {
+    const stale = await refreshStaleProcesses(25, notifyFilters, {
       markDashboardSync: true,
       notifyFilters,
     }).catch((err) => {
@@ -1180,6 +1186,61 @@ export async function refreshProcessInDb(
   return "updated";
 }
 
+/** Actualiza procesos descartados (archivados) bajo demanda — no corre en sync CA/Licitaciones. */
+export async function refreshDiscardedProcesses(
+  processIds: string[]
+): Promise<{ updated: number; notFound: number; errors: string[] }> {
+  const { supabase, orgRut, ticket } = await getOrgContext();
+  if (!ticket) {
+    throw new Error("Configura el ticket de ChileCompra en org_settings");
+  }
+
+  const uniqueIds = [...new Set(processIds.filter(Boolean))];
+  if (uniqueIds.length === 0) {
+    return { updated: 0, notFound: 0, errors: [] };
+  }
+
+  const { data: rows, error } = await supabase
+    .from("processes")
+    .select("id, codigo_externo, tipo")
+    .eq("organization_id", DEFAULT_ORG_ID)
+    .not("dashboard_archived_at", "is", null)
+    .in("id", uniqueIds);
+
+  if (error) throw new Error(error.message);
+
+  const notifyFilters = await loadOrgContentFilters();
+  let updated = 0;
+  let notFound = 0;
+  const errors: string[] = [];
+
+  for (const row of rows ?? []) {
+    try {
+      const normalized = await refreshProcessByCodigo(
+        ticket,
+        row.codigo_externo,
+        row.tipo as ProcessTipo
+      );
+      if (!normalized) {
+        notFound += 1;
+        continue;
+      }
+      await upsertProcess(supabase, normalized, orgRut, {
+        notifyFilters,
+        forceRefresh: true,
+      });
+      updated += 1;
+      await delay(300);
+    } catch (err) {
+      errors.push(
+        `${row.codigo_externo}: ${err instanceof Error ? err.message : "Error desconocido"}`
+      );
+    }
+  }
+
+  return { updated, notFound, errors };
+}
+
 /** Vuelve a pedir detalle MP cuando faltan fechas (listado diario o normalización antigua). */
 export async function refreshIncompleteProcesses(
   limit = 20,
@@ -1257,7 +1318,9 @@ export async function refreshStaleProcesses(
 
   const { data: stale } = await supabase
     .from("processes")
-    .select("id, codigo_externo, tipo, nombre, servicios_requeridos, adjudicado_a_mi, estado")
+    .select(
+      "id, codigo_externo, tipo, nombre, servicios_requeridos, adjudicado_a_mi, estado, fecha_cierre, hora_cierre"
+    )
     .eq("organization_id", DEFAULT_ORG_ID)
     .is("dashboard_archived_at", null)
     .lte("fecha_cierre", new Date().toISOString())
@@ -1271,6 +1334,9 @@ export async function refreshStaleProcesses(
 
   for (const row of stale ?? []) {
     if (refreshed >= limit) break;
+    if (!isPastCierre(row.fecha_cierre as string | null, row.hora_cierre as string | null)) {
+      continue;
+    }
     if (!isProcessRelevant(row, filters)) continue;
 
     try {

@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { createServiceClient } from "@/lib/supabase/server";
 import { DEFAULT_ORG_ID } from "@/types/database";
 
@@ -21,7 +22,7 @@ export interface OnboardingStatus {
   keywords_count: number;
 }
 
-export async function getOnboardingStatus(): Promise<OnboardingStatus> {
+export const getOnboardingStatus = cache(async (): Promise<OnboardingStatus> => {
   const supabase = createServiceClient();
 
   const { data: organization } = await supabase
@@ -59,4 +60,4 @@ export async function getOnboardingStatus(): Promise<OnboardingStatus> {
     selected_rubros_count: rubrosCount ?? 0,
     keywords_count: keywordsCount ?? 0,
   };
-}
+});

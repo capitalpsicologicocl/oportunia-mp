@@ -12,7 +12,6 @@ import { SyncMercadoPublicoButton } from "@/components/dashboard/sync-mp-button"
 import { getDashboardProcesses, type DashboardSort } from "@/lib/dashboard/get-processes";
 import { getMpSyncStatusForScope } from "@/lib/dashboard/sync-status-scope";
 import { maybeRefreshSearchProcess } from "@/lib/ingest/service";
-import { deleteEstadoCambioNotifications } from "@/lib/notifications/create";
 import { getSessionUser } from "@/lib/auth/session";
 import { getUnreadCount } from "@/lib/notifications/queries";
 import { getOnboardingStatus } from "@/lib/onboarding/status";
@@ -88,7 +87,6 @@ export async function renderTipoDashboard({
   const organismo = param(searchParams.organismo);
 
   await maybeRefreshSearchProcess(searchQ);
-  await deleteEstadoCambioNotifications().catch(() => undefined);
 
   const scope = tipo === "compra_agil" ? "compra_agil" : "licitacion";
   const session = await getSessionUser();

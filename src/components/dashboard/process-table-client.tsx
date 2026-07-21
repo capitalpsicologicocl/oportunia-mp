@@ -26,6 +26,7 @@ import type {
   ProcessRow,
 } from "@/lib/dashboard/get-processes";
 import { formatOrganismoSubtitle } from "@/lib/dashboard/ubicacion-display";
+import { MpEstadoBadge } from "@/lib/dashboard/mp-estado-badge";
 import { formatMontoCLP } from "@/lib/montos";
 import { CRM_ROW_CLASS } from "@/lib/dashboard/crm-styles";
 import type { KanbanColumna } from "@/types/database";
@@ -84,13 +85,19 @@ export function ProcessTableClient({
   basePath = "/",
   emptyMessage,
   showTipoColumn = true,
+  mode = "active",
+  showCrmColumn,
 }: {
   processes: ProcessRow[];
   sort: DashboardSort;
   basePath?: string;
   emptyMessage?: string;
   showTipoColumn?: boolean;
+  mode?: "active" | "discarded";
+  showCrmColumn?: boolean;
 }) {
+  const isDiscarded = mode === "discarded";
+  const showCrm = showCrmColumn ?? !isDiscarded;
   const router = useRouter();
   const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
@@ -172,6 +179,98 @@ export function ProcessTableClient({
     }
   }
 
+  async function bulkDiscardSelected() {
+    const ids = Array.from(selected);
+    if (!ids.length) return;
+    if (!confirm(`¿Descartar ${ids.length} oportunidad(es)? Irán a Descartadas y no se actualizarán en sync.`)) {
+      return;
+    }
+
+    setUpdating(true);
+    try {
+      const res = await fetch("/api/processes/discard-dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Error");
+      setSelected(new Set());
+      router.refresh();
+    } catch {
+      alert("No se pudo descartar las oportunidades seleccionadas.");
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  async function refreshDiscardedIds(ids: string[]) {
+    if (!ids.length) return;
+    setUpdating(true);
+    try {
+      const res = await fetch("/api/processes/refresh-discarded", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        updated?: number;
+        errors?: string[];
+        error?: string;
+      };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Error");
+      if (data.errors?.length) {
+        alert(`Actualizadas ${data.updated ?? 0}. Avisos: ${data.errors.slice(0, 2).join(" · ")}`);
+      }
+      setSelected(new Set());
+      router.refresh();
+    } catch {
+      alert("No se pudo actualizar desde Mercado Público.");
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  async function restoreSelected() {
+    const ids = Array.from(selected);
+    if (!ids.length) return;
+    setUpdating(true);
+    try {
+      const res = await fetch("/api/processes/restore-dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Error");
+      setSelected(new Set());
+      router.refresh();
+    } catch {
+      alert("No se pudo restaurar al dashboard activo.");
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  async function restoreOne(processId: string) {
+    setRowBusy(processId);
+    try {
+      const res = await fetch("/api/processes/restore-dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [processId] }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Error");
+      router.refresh();
+    } catch {
+      alert("No se pudo restaurar al dashboard activo.");
+    } finally {
+      setRowBusy(null);
+    }
+  }
+
   async function discardToHistorial(processId: string) {
     setRowBusy(processId);
     try {
@@ -184,7 +283,7 @@ export function ProcessTableClient({
       if (!res.ok || !data.ok) throw new Error(data.error ?? "Error");
       router.refresh();
     } catch {
-      alert("No se pudo enviar al historial.");
+      alert("No se pudo descartar la oportunidad.");
     } finally {
       setRowBusy(null);
     }
@@ -201,44 +300,100 @@ export function ProcessTableClient({
   return (
     <div className={`space-y-2 ${isPending ? "opacity-60" : ""}`}>
       {selected.size > 0 && (
-        <div className="brand-card flex flex-wrap items-center gap-2 px-3 py-2">
+        <div
+          className={cn(
+            "brand-card flex flex-wrap items-center gap-2 px-3 py-2",
+            isDiscarded && "border-muted-foreground/20 bg-muted/40"
+          )}
+        >
           <span className="text-xs text-muted-foreground">
             {selected.size} seleccionada{selected.size !== 1 ? "s" : ""}
           </span>
+          {isDiscarded ? (
+            <>
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={updating}
+                onClick={() => refreshDiscardedIds(Array.from(selected))}
+              >
+                Actualizar seleccionadas
+              </Button>
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={updating}
+                onClick={() => refreshDiscardedIds(pageIds)}
+              >
+                Actualizar todas (página)
+              </Button>
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={updating}
+                onClick={restoreSelected}
+              >
+                Restaurar al dashboard
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={updating}
+                onClick={() => applyRevision("revisada")}
+              >
+                Revisada
+              </Button>
+              <Button
+                type="button"
+                size="xs"
+                variant="destructive"
+                disabled={updating}
+                onClick={bulkDiscardSelected}
+              >
+                Descartar
+              </Button>
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={updating}
+                onClick={() => applyRevision("no_revisada")}
+              >
+                No revisada
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+
+      {isDiscarded && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-muted-foreground/20 bg-muted/30 px-3 py-2">
+          <p className="text-xs text-muted-foreground">
+            Las descartadas no se actualizan al sincronizar CA/Licitaciones. Usa actualización manual aquí.
+          </p>
           <Button
             type="button"
-            size="xs"
+            size="sm"
             variant="outline"
             disabled={updating}
-            onClick={() => applyRevision("revisada")}
+            onClick={() => refreshDiscardedIds(pageIds)}
           >
-            Revisada
-          </Button>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            disabled={updating}
-            onClick={() => applyRevision("descartada")}
-          >
-            Descartada
-          </Button>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            disabled={updating}
-            onClick={() => applyRevision("no_revisada")}
-          >
-            No revisada
+            {updating ? "Actualizando…" : "Actualizar todas (página)"}
           </Button>
         </div>
       )}
 
-      <div className="brand-card">
+      <div className={cn("brand-card", isDiscarded && "border-muted-foreground/25 bg-muted/20")}>
         <Table className="table-fixed text-[11px]">
           <TableHeader>
-            <TableRow className="bg-[#11233d]/5 hover:bg-[#11233d]/5">
+            <TableRow className={cn("bg-[#11233d]/5 hover:bg-[#11233d]/5", isDiscarded && "bg-muted/50 hover:bg-muted/50")}>
               <TableHead className="w-[3%] px-1 text-center">
                 <Checkbox
                   checked={allSelected}
@@ -248,7 +403,8 @@ export function ProcessTableClient({
               </TableHead>
               <TableHead className={`${showTipoColumn ? "w-[10%]" : "w-[9%]"} px-2 text-center`}>Código</TableHead>
               <TableHead className={`${showTipoColumn ? "w-[22%]" : "w-[23%]"} px-2 text-center`}>Nombre</TableHead>
-              <TableHead className="w-[5%] px-1 text-center">Rev.</TableHead>
+              {!isDiscarded && <TableHead className="w-[5%] px-1 text-center">Rev.</TableHead>}
+              {isDiscarded && <TableHead className="w-[6%] px-1 text-center">Acción</TableHead>}
               {showTipoColumn && <TableHead className="w-[7%] px-2 text-center">Tipo</TableHead>}
               <TableHead className={`${showTipoColumn ? "w-[8%]" : "w-[9%]"} px-2 text-center`}>
                 <SortHeader label="Monto" field="monto_asc" current={sort} onSort={applySort} />
@@ -262,7 +418,9 @@ export function ProcessTableClient({
               </TableHead>
               <TableHead className="w-[5%] px-1 text-center">Hr. Cierre</TableHead>
               <TableHead className="w-[7%] px-1 text-center">Estado</TableHead>
-              <TableHead className={`${showTipoColumn ? "w-[9%]" : "w-[10%]"} px-1 text-center`}>CRM</TableHead>
+              {showCrm && (
+                <TableHead className={`${showTipoColumn ? "w-[9%]" : "w-[10%]"} px-1 text-center`}>CRM</TableHead>
+              )}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -280,11 +438,13 @@ export function ProcessTableClient({
               return (
                 <TableRow
                   key={p.id}
-                  className={
-                    p.adjudicado_a_mi
-                      ? "border-l-[3px] border-l-emerald-600 bg-emerald-50/60"
-                      : crmRowClass
-                  }
+                  className={cn(
+                    isDiscarded && "bg-muted/30 text-muted-foreground hover:bg-muted/40",
+                    !isDiscarded &&
+                      (p.adjudicado_a_mi
+                        ? "border-l-[3px] border-l-emerald-600 bg-emerald-50/60"
+                        : crmRowClass)
+                  )}
                   data-selected={selected.has(p.id) ? true : undefined}
                 >
                   <TableCell className="px-1">
@@ -328,32 +488,47 @@ export function ProcessTableClient({
                       </Badge>
                     )}
                   </TableCell>
-                  <TableCell className="px-1">
-                    <div className="flex flex-col items-center gap-0.5">
+                  {isDiscarded ? (
+                    <TableCell className="px-1">
                       <Button
                         type="button"
                         size="xs"
                         variant="outline"
-                        className="h-5 min-w-[2rem] px-1 text-[9px] font-semibold"
-                        disabled={rowBusy === p.id || revision === "revisada"}
-                        title="Marcar como revisada"
-                        onClick={() => markReviewed(p.id)}
-                      >
-                        REV
-                      </Button>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        className="h-5 min-w-[2rem] px-1 text-[9px] font-semibold hover:border-destructive hover:text-destructive"
+                        className="h-5 px-1 text-[9px]"
                         disabled={rowBusy === p.id}
-                        title="Descartar al historial"
-                        onClick={() => discardToHistorial(p.id)}
+                        onClick={() => restoreOne(p.id)}
                       >
-                        DESC
+                        Restaurar
                       </Button>
-                    </div>
-                  </TableCell>
+                    </TableCell>
+                  ) : (
+                    <TableCell className="px-1">
+                      <div className="flex flex-col items-center gap-0.5">
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          className="h-5 min-w-[2rem] px-1 text-[9px] font-semibold"
+                          disabled={rowBusy === p.id || revision === "revisada"}
+                          title="Marcar como revisada"
+                          onClick={() => markReviewed(p.id)}
+                        >
+                          REV
+                        </Button>
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          className="h-5 min-w-[2rem] px-1 text-[9px] font-semibold hover:border-destructive hover:text-destructive"
+                          disabled={rowBusy === p.id}
+                          title="Descartar"
+                          onClick={() => discardToHistorial(p.id)}
+                        >
+                          DESC
+                        </Button>
+                      </div>
+                    </TableCell>
+                  )}
                   {showTipoColumn && (
                     <TableCell className="truncate px-2 text-center text-[10px]">{tipoLabel(p.tipo)}</TableCell>
                   )}
@@ -372,22 +547,27 @@ export function ProcessTableClient({
                   <TableCell className="truncate px-2 text-center text-[10px] text-muted-foreground">
                     {formatHora(p.hora_cierre)}
                   </TableCell>
-                  <TableCell
-                    className="truncate px-1 text-center text-[10px] text-muted-foreground"
-                    title={p.estado ?? undefined}
-                  >
-                    {p.estado ?? "—"}
+                  <TableCell className="px-1 text-center">
+                    <MpEstadoBadge
+                      estado={p.estado}
+                      adjudicadoAMi={p.adjudicado_a_mi}
+                      fechaCierre={p.fecha_cierre}
+                      horaCierre={p.hora_cierre}
+                      className={isDiscarded ? "opacity-80" : undefined}
+                    />
                   </TableCell>
-                  <TableCell className="px-1 align-top">
-                    <div className="flex justify-center">
-                      <ProcessCrmCell
-                        processId={p.id}
-                        codigoExterno={p.codigo_externo}
-                        enCrm={p.en_crm}
-                        crmColumna={p.crm_columna}
-                      />
-                    </div>
-                  </TableCell>
+                  {showCrm && (
+                    <TableCell className="px-1 align-top">
+                      <div className="flex justify-center">
+                        <ProcessCrmCell
+                          processId={p.id}
+                          codigoExterno={p.codigo_externo}
+                          enCrm={p.en_crm}
+                          crmColumna={p.crm_columna}
+                        />
+                      </div>
+                    </TableCell>
+                  )}
                 </TableRow>
               );
             })}

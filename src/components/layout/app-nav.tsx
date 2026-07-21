@@ -13,9 +13,9 @@ const PRIMARY_NAV = [
 ] as const;
 
 const MORE_NAV = [
-  { href: "/historial", label: "Historial" },
   { href: "/bandeja", label: "Bandeja" },
   { href: "/crm/archivo", label: "Archivo CRM" },
+  { href: "/historial", label: "Descartadas" },
   { href: "/ajustes", label: "Ajustes" },
 ] as const;
 
