@@ -1241,6 +1241,65 @@ export async function refreshDiscardedProcesses(
   return { updated, notFound, errors };
 }
 
+/** Actualiza procesos activos del dashboard por código (página o selección). */
+export async function refreshDashboardProcesses(
+  processIds: string[]
+): Promise<{ updated: number; notFound: number; skipped: number; errors: string[] }> {
+  const { supabase, orgRut, ticket } = await getOrgContext();
+  if (!ticket) {
+    throw new Error("Configura el ticket de ChileCompra en org_settings");
+  }
+
+  const uniqueIds = [...new Set(processIds.filter(Boolean))];
+  if (uniqueIds.length === 0) {
+    return { updated: 0, notFound: 0, skipped: 0, errors: [] };
+  }
+
+  const { data: rows, error } = await supabase
+    .from("processes")
+    .select("id, codigo_externo, tipo")
+    .eq("organization_id", DEFAULT_ORG_ID)
+    .is("dashboard_archived_at", null)
+    .eq("synced_via_dashboard", true)
+    .in("id", uniqueIds);
+
+  if (error) throw new Error(error.message);
+
+  const foundIds = new Set((rows ?? []).map((r) => r.id as string));
+  const skipped = uniqueIds.filter((id) => !foundIds.has(id)).length;
+
+  const notifyFilters = await loadOrgContentFilters();
+  let updated = 0;
+  let notFound = 0;
+  const errors: string[] = [];
+
+  for (const row of rows ?? []) {
+    try {
+      const normalized = await refreshProcessByCodigo(
+        ticket,
+        row.codigo_externo,
+        row.tipo as ProcessTipo
+      );
+      if (!normalized) {
+        notFound += 1;
+        continue;
+      }
+      await upsertProcess(supabase, normalized, orgRut, {
+        notifyFilters,
+        markDashboardSync: true,
+      });
+      updated += 1;
+      await delay(300);
+    } catch (err) {
+      errors.push(
+        `${row.codigo_externo}: ${err instanceof Error ? err.message : "Error desconocido"}`
+      );
+    }
+  }
+
+  return { updated, notFound, skipped, errors };
+}
+
 /** Vuelve a pedir detalle MP cuando faltan fechas (listado diario o normalización antigua). */
 export async function refreshIncompleteProcesses(
   limit = 20,

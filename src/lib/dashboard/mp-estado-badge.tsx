@@ -12,6 +12,7 @@ export function MpEstadoBadge({
   fechaCierre,
   horaCierre,
   className,
+  compact = false,
 }: {
   estado: string | null;
   adjudicadoAMi: boolean;
@@ -19,16 +20,24 @@ export function MpEstadoBadge({
   fechaCierre?: string | null;
   horaCierre?: string | null;
   className?: string;
+  /** Tabla dashboard: textos cortos y badge que no desborda la celda. */
+  compact?: boolean;
 }) {
   const { label, tone } =
     fechaCierre !== undefined || horaCierre !== undefined
       ? effectiveMpEstadoDisplay(estado, adjudicadoAMi, fechaCierre, horaCierre, adjudicadoRut)
       : mpEstadoDisplayLabel(estado, adjudicadoAMi, adjudicadoRut);
 
+  const displayLabel = compact ? compactEstadoLabel(label) : label;
+
   return (
     <Badge
+      title={compact && label !== displayLabel ? label : undefined}
       className={cn(
-        "text-[10px] font-medium",
+        "font-medium",
+        compact
+          ? "max-w-full whitespace-normal px-1 py-0.5 text-center text-[8px] leading-tight"
+          : "text-[10px]",
         tone === "won" && "bg-emerald-600 text-white hover:bg-emerald-600",
         tone === "selected" && "border-blue-500/40 bg-blue-50 text-blue-900 hover:bg-blue-50",
         tone === "lost" && "bg-gray-500 text-white hover:bg-gray-500",
@@ -38,7 +47,18 @@ export function MpEstadoBadge({
         className
       )}
     >
-      {label}
+      {displayLabel}
     </Badge>
   );
+}
+
+function compactEstadoLabel(label: string): string {
+  switch (label) {
+    case "Proveedor seleccionado":
+      return "Prov. sel.";
+    case "Cierre vencido":
+      return "Cierre venc.";
+    default:
+      return label;
+  }
 }

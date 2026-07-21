@@ -232,6 +232,40 @@ export function ProcessTableClient({
     }
   }
 
+  async function refreshDashboardIds(ids: string[]) {
+    if (!ids.length) return;
+    setUpdating(true);
+    try {
+      const res = await fetch("/api/processes/refresh-dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        updated?: number;
+        notFound?: number;
+        errors?: string[];
+        error?: string;
+      };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "Error");
+      const avisos = data.errors?.filter(Boolean) ?? [];
+      if (avisos.length) {
+        alert(
+          `Actualizadas ${data.updated ?? 0} de ${ids.length}` +
+            (data.notFound ? ` · ${data.notFound} no encontradas en MP` : "") +
+            `. Avisos: ${avisos.slice(0, 2).join(" · ")}`
+        );
+      }
+      setSelected(new Set());
+      router.refresh();
+    } catch {
+      alert("No se pudo actualizar estados desde Mercado Público.");
+    } finally {
+      setUpdating(false);
+    }
+  }
+
   async function restoreSelected() {
     const ids = Array.from(selected);
     if (!ids.length) return;
@@ -346,6 +380,15 @@ export function ProcessTableClient({
                 size="xs"
                 variant="outline"
                 disabled={updating}
+                onClick={() => refreshDashboardIds(Array.from(selected))}
+              >
+                Actualizar estados
+              </Button>
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={updating}
                 onClick={() => applyRevision("revisada")}
               >
                 Revisada
@@ -370,6 +413,23 @@ export function ProcessTableClient({
               </Button>
             </>
           )}
+        </div>
+      )}
+
+      {!isDiscarded && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#11233d]/10 bg-[#11233d]/[0.03] px-3 py-2">
+          <p className="text-xs text-muted-foreground">
+            Consulta MP por código para actualizar estado, montos y fechas de esta página (sin límite de sync).
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={updating}
+            onClick={() => refreshDashboardIds(pageIds)}
+          >
+            {updating ? "Actualizando…" : "Actualizar estados (página)"}
+          </Button>
         </div>
       )}
 
@@ -417,9 +477,9 @@ export function ProcessTableClient({
                 <SortHeader label="Cierre" field="cierre_asc" current={sort} onSort={applySort} />
               </TableHead>
               <TableHead className="w-[5%] px-1 text-center">Hr. Cierre</TableHead>
-              <TableHead className="w-[7%] px-1 text-center">Estado</TableHead>
+              <TableHead className="w-[8%] px-0.5 text-center">Estado</TableHead>
               {showCrm && (
-                <TableHead className={`${showTipoColumn ? "w-[9%]" : "w-[10%]"} px-1 text-center`}>CRM</TableHead>
+                <TableHead className={`${showTipoColumn ? "w-[8%]" : "w-[9%]"} px-1 text-center`}>CRM</TableHead>
               )}
             </TableRow>
           </TableHeader>
@@ -547,18 +607,21 @@ export function ProcessTableClient({
                   <TableCell className="truncate px-2 text-center text-[10px] text-muted-foreground">
                     {formatHora(p.hora_cierre)}
                   </TableCell>
-                  <TableCell className="px-1 text-center">
-                    <MpEstadoBadge
-                      estado={p.estado}
-                      adjudicadoAMi={p.adjudicado_a_mi}
-                      fechaCierre={p.fecha_cierre}
-                      horaCierre={p.hora_cierre}
-                      className={isDiscarded ? "opacity-80" : undefined}
-                    />
+                  <TableCell className="overflow-hidden px-0.5 text-center align-middle">
+                    <div className="mx-auto flex max-w-full justify-center overflow-hidden">
+                      <MpEstadoBadge
+                        estado={p.estado}
+                        adjudicadoAMi={p.adjudicado_a_mi}
+                        fechaCierre={p.fecha_cierre}
+                        horaCierre={p.hora_cierre}
+                        compact
+                        className={isDiscarded ? "opacity-80" : undefined}
+                      />
+                    </div>
                   </TableCell>
                   {showCrm && (
-                    <TableCell className="px-1 align-top">
-                      <div className="flex justify-center">
+                    <TableCell className="overflow-hidden px-1 align-middle">
+                      <div className="flex justify-center overflow-hidden">
                         <ProcessCrmCell
                           processId={p.id}
                           codigoExterno={p.codigo_externo}
