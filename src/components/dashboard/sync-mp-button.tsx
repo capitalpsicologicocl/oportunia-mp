@@ -12,12 +12,18 @@ export function SyncMercadoPublicoButton({
   lastSyncLabel: lastSyncLabelProp,
   lastManualSyncLabel: lastManualSyncLabelProp,
   lastCronSyncLabel: lastCronSyncLabelProp,
+  lastCronAttemptLabel: lastCronAttemptLabelProp,
+  lastCronError: lastCronErrorProp,
+  lastCronSummaryPartial: lastCronSummaryPartialProp,
 }: {
   scope: Exclude<SyncScope, "all">;
   isFirstSync?: boolean;
   lastSyncLabel?: string;
   lastManualSyncLabel?: string;
   lastCronSyncLabel?: string;
+  lastCronAttemptLabel?: string;
+  lastCronError?: string | null;
+  lastCronSummaryPartial?: boolean | null;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -29,6 +35,9 @@ export function SyncMercadoPublicoButton({
     lastSyncLabel: "Nunca",
     lastManualSyncLabel: "Nunca",
     lastCronSyncLabel: "Nunca",
+    lastCronAttemptLabel: "Nunca",
+    lastCronError: null as string | null,
+    lastCronSummaryPartial: null as boolean | null,
   });
 
   useEffect(() => {
@@ -48,12 +57,18 @@ export function SyncMercadoPublicoButton({
           lastSyncLabel?: string;
           lastManualSyncLabel?: string;
           lastCronSyncLabel?: string;
+          lastCronAttemptLabel?: string;
+          lastCronError?: string | null;
+          lastCronSummaryPartial?: boolean | null;
         }) => {
           setSyncMeta({
             isFirstSync: data.isFirstSync ?? true,
             lastSyncLabel: data.lastSyncLabel ?? "Nunca",
             lastManualSyncLabel: data.lastManualSyncLabel ?? "Nunca",
             lastCronSyncLabel: data.lastCronSyncLabel ?? "Nunca",
+            lastCronAttemptLabel: data.lastCronAttemptLabel ?? "Nunca",
+            lastCronError: data.lastCronError ?? null,
+            lastCronSummaryPartial: data.lastCronSummaryPartial ?? null,
           });
         }
       )
@@ -70,6 +85,10 @@ export function SyncMercadoPublicoButton({
   const lastSyncLabel = lastSyncLabelProp ?? syncMeta.lastSyncLabel;
   const lastManualSyncLabel = lastManualSyncLabelProp ?? syncMeta.lastManualSyncLabel;
   const lastCronSyncLabel = lastCronSyncLabelProp ?? syncMeta.lastCronSyncLabel;
+  const lastCronAttemptLabel = lastCronAttemptLabelProp ?? syncMeta.lastCronAttemptLabel;
+  const lastCronError = lastCronErrorProp ?? syncMeta.lastCronError;
+  const lastCronSummaryPartial =
+    lastCronSummaryPartialProp ?? syncMeta.lastCronSummaryPartial;
 
   async function handleSync() {
     setLoading(true);
@@ -222,7 +241,16 @@ export function SyncMercadoPublicoButton({
           <p>
             Última sync automática (00:01):{" "}
             <strong className="text-foreground">{lastCronSyncLabel}</strong>
+            {lastCronSummaryPartial && lastCronSyncLabel !== "Nunca" && (
+              <span className="text-amber-700"> · parcial</span>
+            )}
           </p>
+          {lastCronSyncLabel === "Nunca" && lastCronAttemptLabel !== "Nunca" && (
+            <p className="text-[10px] text-amber-800">
+              Cron intentó: {lastCronAttemptLabel}
+              {lastCronError ? ` · error: ${lastCronError}` : ""}
+            </p>
+          )}
           {!isFirstSync && (
             <p className="text-[10px]">
               Última actualización (cualquier origen): {lastSyncLabel}

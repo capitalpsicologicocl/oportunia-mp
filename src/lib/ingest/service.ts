@@ -527,9 +527,9 @@ async function fetchDailyProcessesWithCompraAgil(
   return [...lic, ...ca];
 }
 
-const SYNC_BATCH_SIZE = 6;
-/** Tiempo máximo por request HTTP (~50 s) para evitar timeout del navegador. */
-const SYNC_BATCH_BUDGET_MS = 50_000;
+const SYNC_BATCH_SIZE = 8;
+/** Tiempo máximo por request HTTP (~55 s) para evitar timeout del navegador. */
+const SYNC_BATCH_BUDGET_MS = 55_000;
 
 interface MpSyncPending {
   candidates: Array<{ codigo_externo: string; tipo: ProcessTipo; nombre: string }>;
@@ -846,7 +846,7 @@ async function finalizeDashboardSync(
     pending.updated += incomplete.refreshed;
     pending.errors.push(...incomplete.errors.slice(0, 2));
 
-    const stale = await refreshStaleProcesses(25, notifyFilters, {
+    const stale = await refreshStaleProcesses(pending.cron_run ? 12 : 25, notifyFilters, {
       markDashboardSync: true,
       notifyFilters,
     }).catch((err) => {
@@ -988,7 +988,7 @@ export async function runDashboardSyncBatch(
         if (result === "created") pending.created += 1;
         else pending.updated += 1;
       }
-      await delay(250);
+      await delay(120);
     } catch (err) {
       pending.errors.push(formatSyncProcessError(candidate.codigo_externo, err));
     }
@@ -1006,38 +1006,104 @@ export async function runDashboardSyncBatch(
   return buildBatchResult(pending, false, "enrich");
 }
 
-async function runScopedDashboardSync(
-  scope: Exclude<SyncScope, "all">,
-  cron = false
-): Promise<IngestSummary> {
-  let last: DashboardSyncBatchResult | null = null;
-  let guard = 0;
-  do {
-    last = await runDashboardSyncBatch({ continueBatch: guard > 0, scope, cron });
-    guard += 1;
-  } while (!last.done && guard < 120);
-
-  if (!last) {
-    throw new Error("No se pudo iniciar la sincronización");
-  }
-  return last.summary;
+/** Cron / uso interno legado: ejecuta CA + licitaciones seguidos (puede exceder timeout). */
+export async function runDashboardSync(): Promise<IngestSummary & { archived?: number }> {
+  return runDashboardSyncCron({ maxMs: 275_000 });
 }
 
-/** Cron / uso interno: ejecuta CA + licitaciones seguidos y archiva al historial. */
-export async function runDashboardSync(): Promise<IngestSummary & { archived?: number }> {
-  const ca = await runScopedDashboardSync("compra_agil", true);
-  const lic = await runScopedDashboardSync("licitacion", true);
+export async function recordCronAttempt(): Promise<void> {
+  const supabase = createServiceClient();
+  await supabase
+    .from("org_settings")
+    .update({
+      last_cron_attempt_at: new Date().toISOString(),
+      last_cron_error: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("organization_id", DEFAULT_ORG_ID);
+}
+
+export async function recordCronFailure(message: string): Promise<void> {
+  const supabase = createServiceClient();
+  await supabase
+    .from("org_settings")
+    .update({
+      last_cron_error: message.slice(0, 500),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("organization_id", DEFAULT_ORG_ID);
+}
+
+/**
+ * Sync nocturna con presupuesto de tiempo: retoma colas pendientes y avanza CA + licitaciones
+ * dentro del límite de Vercel (≈275 s) sin bloquear hasta completar todo en una sola noche.
+ */
+export async function runDashboardSyncCron(options?: {
+  maxMs?: number;
+}): Promise<IngestSummary & { archived?: number; partial?: boolean }> {
+  const maxMs = options?.maxMs ?? 275_000;
+  const deadline = Date.now() + maxMs;
+  const supabase = createServiceClient();
+
+  const summaries: Partial<Record<Exclude<SyncScope, "all">, IngestSummary>> = {};
+  let partial = false;
+
+  for (const scope of ["compra_agil", "licitacion"] as const) {
+    if (Date.now() >= deadline) {
+      partial = true;
+      break;
+    }
+
+    const existing = await loadMpSyncPending(supabase, scope);
+    let continueBatch = Boolean(existing && !existing.finalized);
+
+    while (Date.now() < deadline) {
+      const result = await runDashboardSyncBatch({ continueBatch, scope, cron: true });
+      continueBatch = true;
+      if (result.done) {
+        summaries[scope] = result.summary;
+        break;
+      }
+      partial = true;
+    }
+
+    if (!summaries[scope]) {
+      partial = true;
+    }
+  }
+
   const { archived } = await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }));
-  return {
-    fetched: ca.fetched + lic.fetched,
-    created: ca.created + lic.created,
-    updated: ca.updated + lic.updated,
+
+  const ca = summaries.compra_agil;
+  const lic = summaries.licitacion;
+  const summary: IngestSummary & { archived?: number; partial?: boolean } = {
+    fetched: (ca?.fetched ?? 0) + (lic?.fetched ?? 0),
+    created: (ca?.created ?? 0) + (lic?.created ?? 0),
+    updated: (ca?.updated ?? 0) + (lic?.updated ?? 0),
     evaluatedIa: 0,
-    errors: [...ca.errors, ...lic.errors].slice(0, 20),
-    mode: lic.mode ?? ca.mode,
-    daysQueried: lic.daysQueried,
+    errors: [...(ca?.errors ?? []), ...(lic?.errors ?? [])].slice(0, 20),
+    mode: lic?.mode ?? ca?.mode,
+    daysQueried: lic?.daysQueried ?? ca?.daysQueried,
     archived,
+    partial,
   };
+
+  await supabase
+    .from("org_settings")
+    .update({
+      last_cron_summary: {
+        partial,
+        fetched: summary.fetched,
+        created: summary.created,
+        updated: summary.updated,
+        archived,
+        at: new Date().toISOString(),
+      },
+      updated_at: new Date().toISOString(),
+    })
+    .eq("organization_id", DEFAULT_ORG_ID);
+
+  return summary;
 }
 
 async function getLastMpSyncAt(
@@ -1186,6 +1252,56 @@ export async function refreshProcessInDb(
   return "updated";
 }
 
+const REFRESH_CONCURRENCY = 4;
+
+async function refreshProcessRowsInParallel(
+  rows: Array<{ codigo_externo: string; tipo: ProcessTipo }>,
+  options: {
+    ticket: string;
+    supabase: ReturnType<typeof createServiceClient>;
+    orgRut: string | null;
+    notifyFilters: Awaited<ReturnType<typeof loadOrgContentFilters>>;
+    upsertOptions: Parameters<typeof upsertProcess>[3];
+  }
+): Promise<{ updated: number; notFound: number; errors: string[] }> {
+  let updated = 0;
+  let notFound = 0;
+  const errors: string[] = [];
+
+  async function refreshOne(row: { codigo_externo: string; tipo: ProcessTipo }) {
+    try {
+      const normalized = await refreshProcessByCodigo(
+        options.ticket,
+        row.codigo_externo,
+        row.tipo
+      );
+      if (!normalized) {
+        notFound += 1;
+        return;
+      }
+      await upsertProcess(options.supabase, normalized, options.orgRut, {
+        notifyFilters: options.notifyFilters,
+        ...options.upsertOptions,
+      });
+      updated += 1;
+    } catch (err) {
+      errors.push(
+        `${row.codigo_externo}: ${err instanceof Error ? err.message : "Error desconocido"}`
+      );
+    }
+  }
+
+  for (let i = 0; i < rows.length; i += REFRESH_CONCURRENCY) {
+    const chunk = rows.slice(i, i + REFRESH_CONCURRENCY);
+    await Promise.all(chunk.map((row) => refreshOne(row)));
+    if (i + REFRESH_CONCURRENCY < rows.length) {
+      await delay(200);
+    }
+  }
+
+  return { updated, notFound, errors };
+}
+
 /** Actualiza procesos descartados (archivados) bajo demanda — no corre en sync CA/Licitaciones. */
 export async function refreshDiscardedProcesses(
   processIds: string[]
@@ -1210,33 +1326,19 @@ export async function refreshDiscardedProcesses(
   if (error) throw new Error(error.message);
 
   const notifyFilters = await loadOrgContentFilters();
-  let updated = 0;
-  let notFound = 0;
-  const errors: string[] = [];
-
-  for (const row of rows ?? []) {
-    try {
-      const normalized = await refreshProcessByCodigo(
-        ticket,
-        row.codigo_externo,
-        row.tipo as ProcessTipo
-      );
-      if (!normalized) {
-        notFound += 1;
-        continue;
-      }
-      await upsertProcess(supabase, normalized, orgRut, {
-        notifyFilters,
-        forceRefresh: true,
-      });
-      updated += 1;
-      await delay(300);
-    } catch (err) {
-      errors.push(
-        `${row.codigo_externo}: ${err instanceof Error ? err.message : "Error desconocido"}`
-      );
+  const { updated, notFound, errors } = await refreshProcessRowsInParallel(
+    (rows ?? []).map((row) => ({
+      codigo_externo: row.codigo_externo,
+      tipo: row.tipo as ProcessTipo,
+    })),
+    {
+      ticket,
+      supabase,
+      orgRut,
+      notifyFilters,
+      upsertOptions: { forceRefresh: true },
     }
-  }
+  );
 
   return { updated, notFound, errors };
 }
@@ -1269,33 +1371,19 @@ export async function refreshDashboardProcesses(
   const skipped = uniqueIds.filter((id) => !foundIds.has(id)).length;
 
   const notifyFilters = await loadOrgContentFilters();
-  let updated = 0;
-  let notFound = 0;
-  const errors: string[] = [];
-
-  for (const row of rows ?? []) {
-    try {
-      const normalized = await refreshProcessByCodigo(
-        ticket,
-        row.codigo_externo,
-        row.tipo as ProcessTipo
-      );
-      if (!normalized) {
-        notFound += 1;
-        continue;
-      }
-      await upsertProcess(supabase, normalized, orgRut, {
-        notifyFilters,
-        markDashboardSync: true,
-      });
-      updated += 1;
-      await delay(300);
-    } catch (err) {
-      errors.push(
-        `${row.codigo_externo}: ${err instanceof Error ? err.message : "Error desconocido"}`
-      );
+  const { updated, notFound, errors } = await refreshProcessRowsInParallel(
+    (rows ?? []).map((row) => ({
+      codigo_externo: row.codigo_externo,
+      tipo: row.tipo as ProcessTipo,
+    })),
+    {
+      ticket,
+      supabase,
+      orgRut,
+      notifyFilters,
+      upsertOptions: { markDashboardSync: true },
     }
-  }
+  );
 
   return { updated, notFound, skipped, errors };
 }
