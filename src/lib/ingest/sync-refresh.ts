@@ -1,4 +1,5 @@
 import type { ProcessTipo } from "@/types/database";
+import { isPastCierre } from "@/lib/dashboard/cierre-display";
 
 export type SyncScope = "compra_agil" | "licitacion" | "all";
 
@@ -55,6 +56,10 @@ export function mpEstadoDisplayLabel(
 export function processNeedsApiRefresh(row: ProcessRefreshSnapshot): boolean {
   if (row.en_pipeline) return true;
   if (row.adjudicado_a_mi) return true;
+
+  if (isPastCierre(row.fecha_cierre, row.hora_cierre) && !row.en_pipeline && !row.adjudicado_a_mi) {
+    return false;
+  }
 
   const incomplete = !row.hora_publicacion || !row.hora_cierre;
   if (incomplete) return true;

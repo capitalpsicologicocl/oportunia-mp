@@ -4,13 +4,16 @@ import { recordCronAttempt, recordCronFailure, runDashboardSyncCron } from "@/li
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-/** Vercel Cron envía user-agent vercel-cron/1.0 y header x-vercel-cron. */
+/** Señales que Vercel envía al invocar Cron Jobs (varían según versión/plan). */
 function isVercelCronRequest(request: NextRequest): boolean {
-  if (process.env.VERCEL !== "1" || process.env.VERCEL_ENV !== "production") {
-    return false;
-  }
+  if (process.env.VERCEL !== "1") return false;
+
+  if (request.headers.has("x-vercel-cron-auth-token")) return true;
+  if (request.headers.has("x-vercel-cron-schedule")) return true;
+
   const ua = request.headers.get("user-agent") ?? "";
   if (ua.includes("vercel-cron")) return true;
+
   return request.headers.has("x-vercel-cron");
 }
 
@@ -26,12 +29,12 @@ function isAuthorized(request: NextRequest): boolean {
   return isVercelCronRequest(request);
 }
 
-export async function GET(request: NextRequest) {
+async function handleCron(request: NextRequest) {
   if (!isAuthorized(request)) {
     return NextResponse.json(
       {
         error: "No autorizado",
-        hint: "Configura CRON_SECRET en Vercel o invoca desde Cron Jobs de Vercel",
+        hint: "Invoca desde Cron Jobs de Vercel o con Authorization: Bearer CRON_SECRET",
       },
       { status: 401 }
     );
@@ -47,4 +50,12 @@ export async function GET(request: NextRequest) {
     await recordCronFailure(message).catch(() => undefined);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
+}
+
+export async function GET(request: NextRequest) {
+  return handleCron(request);
+}
+
+export async function POST(request: NextRequest) {
+  return handleCron(request);
 }

@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { isPastCierre } from "@/lib/dashboard/cierre-display";
 import { isClosedMpEstado, isTerminalMpEstado } from "@/lib/ingest/sync-refresh";
 import { DEFAULT_ORG_ID } from "@/types/database";
 
@@ -11,6 +12,7 @@ export type DashboardArchiveCandidate = {
   adjudicado_a_mi: boolean;
   adjudicado_rut: string | null;
   fecha_cierre: string | null;
+  hora_cierre: string | null;
   dashboard_archived_at: string | null;
   en_pipeline: boolean;
 };
@@ -31,6 +33,11 @@ export function shouldArchiveDashboardProcess(row: DashboardArchiveCandidate): b
   }
 
   if (row.adjudicado_rut && !row.adjudicado_a_mi) {
+    return true;
+  }
+
+  // Cierre vencido sin seguimiento en CRM (Pre-Eval / Kanban) → Descartadas
+  if (isPastCierre(row.fecha_cierre, row.hora_cierre)) {
     return true;
   }
 
@@ -73,7 +80,9 @@ async function archiveStaleDashboardBatch(): Promise<number> {
 
   const { data: rows, error } = await supabase
     .from("processes")
-    .select("id, estado, adjudicado_a_mi, adjudicado_rut, fecha_cierre, dashboard_archived_at")
+    .select(
+      "id, estado, adjudicado_a_mi, adjudicado_rut, fecha_cierre, hora_cierre, dashboard_archived_at"
+    )
     .eq("organization_id", DEFAULT_ORG_ID)
     .eq("synced_via_dashboard", true)
     .is("dashboard_archived_at", null)
@@ -92,6 +101,7 @@ async function archiveStaleDashboardBatch(): Promise<number> {
       adjudicado_a_mi: Boolean(row.adjudicado_a_mi),
       adjudicado_rut: row.adjudicado_rut as string | null,
       fecha_cierre: row.fecha_cierre as string | null,
+      hora_cierre: row.hora_cierre as string | null,
       dashboard_archived_at: row.dashboard_archived_at as string | null,
       en_pipeline: pipelineIds.has(row.id as string),
     })
@@ -112,7 +122,7 @@ async function archiveStaleDashboardBatch(): Promise<number> {
   return toArchive.length;
 }
 
-/** Mueve procesos terminales / cerrados >30d al historial (no Kanban, no adjudicadas tuyas). */
+/** Mueve procesos terminales / cierre vencido (sin CRM) al historial. */
 export async function archiveStaleDashboardProcesses(): Promise<{ archived: number }> {
   let archived = 0;
   for (let round = 0; round < 30; round += 1) {

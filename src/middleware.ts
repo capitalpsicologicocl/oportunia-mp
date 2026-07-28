@@ -11,6 +11,7 @@ const PUBLIC_PREFIXES = [
   "/api/auth/logout",
   "/api/auth/status",
   "/api/auth/setup",
+  "/api/cron/ingest",
 ];
 
 export async function middleware(request: NextRequest) {

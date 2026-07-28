@@ -829,6 +829,8 @@ async function finalizeDashboardSync(
   notifyFilters: Awaited<ReturnType<typeof loadOrgContentFilters>>,
   scope: Exclude<SyncScope, "all">
 ): Promise<DashboardSyncBatchResult> {
+  const { archived } = await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }));
+
   if (pending.candidates.length === 0) {
     const incomplete = await refreshIncompleteProcesses(15, notifyFilters, {
       markDashboardSync: true,
@@ -846,7 +848,8 @@ async function finalizeDashboardSync(
     pending.updated += incomplete.refreshed;
     pending.errors.push(...incomplete.errors.slice(0, 2));
 
-    const stale = await refreshStaleProcesses(pending.cron_run ? 12 : 25, notifyFilters, {
+    const staleLimit = pending.cron_run ? 8 : 12;
+    const stale = await refreshStaleProcesses(staleLimit, notifyFilters, {
       markDashboardSync: true,
       notifyFilters,
     }).catch((err) => {
@@ -861,7 +864,6 @@ async function finalizeDashboardSync(
   await updateLastMpSyncAt(supabase, scope, pending.cron_run ? "cron" : "manual");
   await saveMpSyncPending(supabase, scope, null);
 
-  const { archived } = await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }));
   const result = buildBatchResult(pending, true, "finalize");
   result.summary.archived = archived;
   return result;
@@ -935,6 +937,9 @@ export async function runDashboardSyncBatch(
 
   if (!pending) {
     await closeStaleSyncRuns(supabase);
+    if (!continueBatch) {
+      await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }));
+    }
     if (scope === "compra_agil") {
       pending = await initCaSyncPending(supabase, { cron });
     } else {
@@ -1045,6 +1050,10 @@ export async function runDashboardSyncCron(options?: {
   const deadline = Date.now() + maxMs;
   const supabase = createServiceClient();
 
+  const { archived: archivedAtStart } = await archiveStaleDashboardProcesses().catch(() => ({
+    archived: 0,
+  }));
+
   const summaries: Partial<Record<Exclude<SyncScope, "all">, IngestSummary>> = {};
   let partial = false;
 
@@ -1072,7 +1081,10 @@ export async function runDashboardSyncCron(options?: {
     }
   }
 
-  const { archived } = await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }));
+  const { archived: archivedAtEnd } = await archiveStaleDashboardProcesses().catch(() => ({
+    archived: 0,
+  }));
+  const archived = archivedAtStart + archivedAtEnd;
 
   const ca = summaries.compra_agil;
   const lic = summaries.licitacion;
@@ -1475,6 +1487,18 @@ export async function refreshStaleProcesses(
     .order("fecha_cierre", { ascending: false })
     .limit(limit * 4);
 
+  const staleIds = (stale ?? []).map((r) => r.id as string);
+  const pipelineIds =
+    staleIds.length > 0
+      ? await supabase
+          .from("kanban_cards")
+          .select("process_id")
+          .eq("organization_id", DEFAULT_ORG_ID)
+          .eq("en_pipeline", true)
+          .in("process_id", staleIds)
+          .then(({ data }) => new Set((data ?? []).map((r) => r.process_id as string)))
+      : new Set<string>();
+
   let refreshed = 0;
   let notFound = 0;
   const errors: string[] = [];
@@ -1482,6 +1506,9 @@ export async function refreshStaleProcesses(
   for (const row of stale ?? []) {
     if (refreshed >= limit) break;
     if (!isPastCierre(row.fecha_cierre as string | null, row.hora_cierre as string | null)) {
+      continue;
+    }
+    if (!pipelineIds.has(row.id as string) && !row.adjudicado_a_mi) {
       continue;
     }
     if (!isProcessRelevant(row, filters)) continue;
