@@ -890,18 +890,24 @@ async function finalizeDashboardSync(
   supabase: ReturnType<typeof createServiceClient>,
   pending: MpSyncPending,
   notifyFilters: Awaited<ReturnType<typeof loadOrgContentFilters>>,
-  scope: Exclude<SyncScope, "all">
+  scope: Exclude<SyncScope, "all">,
+  options?: { fast?: boolean; preArchived?: number }
 ): Promise<DashboardSyncBatchResult> {
-  const { archived } = await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }));
+  const archived = options?.fast
+    ? (options.preArchived ?? 0)
+    : (await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }))).archived;
+
+  const incompleteLimit = options?.fast ? 5 : pending.candidates.length === 0 ? 15 : 20;
+  const staleLimit = options?.fast ? 3 : pending.cron_run ? 8 : 12;
 
   if (pending.candidates.length === 0) {
-    const incomplete = await refreshIncompleteProcesses(15, notifyFilters, {
+    const incomplete = await refreshIncompleteProcesses(incompleteLimit, notifyFilters, {
       markDashboardSync: true,
       notifyFilters,
     }).catch(() => ({ refreshed: 0, errors: [] }));
     pending.updated += incomplete.refreshed;
-  } else {
-    const incomplete = await refreshIncompleteProcesses(20, notifyFilters, {
+  } else if (!options?.fast) {
+    const incomplete = await refreshIncompleteProcesses(incompleteLimit, notifyFilters, {
       markDashboardSync: true,
       notifyFilters,
     }).catch((err) => {
@@ -911,7 +917,6 @@ async function finalizeDashboardSync(
     pending.updated += incomplete.refreshed;
     pending.errors.push(...incomplete.errors.slice(0, 2));
 
-    const staleLimit = pending.cron_run ? 8 : 12;
     const stale = await refreshStaleProcesses(staleLimit, notifyFilters, {
       markDashboardSync: true,
       notifyFilters,
@@ -921,6 +926,12 @@ async function finalizeDashboardSync(
     });
     pending.updated += stale.refreshed;
     pending.errors.push(...stale.errors.slice(0, 3));
+  } else {
+    const incomplete = await refreshIncompleteProcesses(incompleteLimit, notifyFilters, {
+      markDashboardSync: true,
+      notifyFilters,
+    }).catch(() => ({ refreshed: 0, errors: [] }));
+    pending.updated += incomplete.refreshed;
   }
 
   pending.finalized = true;
@@ -977,11 +988,11 @@ export interface DashboardSyncBatchOptions {
   serverSide?: boolean;
 }
 
-const MANUAL_SYNC_BUDGET_MS = 265_000;
-const MANUAL_CANDIDATE_CAP = 40;
-const MANUAL_ENRICH_CONCURRENCY = 5;
-const MANUAL_INITIAL_KEYWORD_TERMS = 16;
-const MANUAL_SERVER_BATCH_BUDGET_MS = 260_000;
+const MANUAL_SYNC_BUDGET_MS = 240_000;
+const MANUAL_CANDIDATE_CAP = 25;
+const MANUAL_ENRICH_CONCURRENCY = 4;
+const MANUAL_ENRICH_MAX_MS = 90_000;
+const MANUAL_INITIAL_KEYWORD_TERMS = 12;
 
 async function discoverFastCaCandidates(
   ticket: string,
@@ -1007,7 +1018,7 @@ async function discoverFastCaCandidates(
   };
 
   try {
-    const pages = lastSyncAt ? 4 : 6;
+    const pages = lastSyncAt ? 3 : 5;
     const rawItems = await fetchCompraAgilPublishedSince(ticket, publicadoDesde, pages);
     for (const raw of rawItems) {
       add(normalizeCompraAgil(raw));
@@ -1109,36 +1120,14 @@ async function enrichCandidatesParallel(
   }
 }
 
-async function refreshActiveDashboardByScope(
-  scope: Exclude<SyncScope, "all">
-): Promise<{ updated: number; errors: string[] }> {
-  const supabase = createServiceClient();
-  const tipo = scope === "compra_agil" ? "compra_agil" : "licitacion";
-  const { data: rows } = await supabase
-    .from("processes")
-    .select("id")
-    .eq("organization_id", DEFAULT_ORG_ID)
-    .eq("tipo", tipo)
-    .eq("synced_via_dashboard", true)
-    .is("dashboard_archived_at", null)
-    .order("fecha_publicacion", { ascending: false, nullsFirst: false })
-    .limit(120);
-
-  if (!rows?.length) return { updated: 0, errors: [] };
-
-  const result = await refreshDashboardProcesses(rows.map((r) => r.id as string));
-  return { updated: result.updated, errors: result.errors };
-}
-
 /**
- * Sync manual en una sola ejecución servidor (~1–3 min): descubrimiento liviano,
- * enriquecimiento paralelo, refresh del dashboard activo y cierre. No requiere
- * mantener el navegador en un bucle de decenas de requests.
+ * Sync manual en una sola ejecución servidor (objetivo < 2 min).
+ * Archiva vencidos, busca novedades, enriquece en paralelo y cierra.
+ * Para refrescar filas visibles usar «Actualizar estados (página)».
  */
 export async function runFastManualSync(
   scope: Exclude<SyncScope, "all">
 ): Promise<DashboardSyncBatchResult> {
-  const deadline = Date.now() + MANUAL_SYNC_BUDGET_MS;
   const { supabase, orgRut, ticket } = await getOrgContext();
   if (!ticket) throw new Error("Configura el ticket de ChileCompra en Ajustes");
 
@@ -1147,6 +1136,8 @@ export async function runFastManualSync(
 
   const notifyFilters = await loadOrgContentFilters();
   const errors: string[] = [];
+
+  const { archived } = await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }));
 
   const lastSyncAt = await getLastMpSyncAt(supabase, scope);
   const candidates =
@@ -1172,21 +1163,18 @@ export async function runFastManualSync(
     light: Boolean(lastSyncAt),
   };
 
-  await enrichCandidatesParallel(ticket, supabase, orgRut, pending, notifyFilters, deadline);
+  const enrichDeadline = Date.now() + MANUAL_ENRICH_MAX_MS;
+  await enrichCandidatesParallel(ticket, supabase, orgRut, pending, notifyFilters, enrichDeadline);
 
   pending.candidates = pending.candidates.slice(0, pending.index);
   pending.index = pending.candidates.length;
   pending.fetched = pending.candidates.length;
 
-  const dashRefresh = await refreshActiveDashboardByScope(scope).catch((err) => ({
-    updated: 0,
-    errors: [err instanceof Error ? err.message : "Error refresh dashboard"],
-  }));
-  pending.updated += dashRefresh.updated;
-  pending.errors.push(...dashRefresh.errors.slice(0, 3));
-
   pending.ca_fetched = true;
-  return finalizeDashboardSync(supabase, pending, notifyFilters, scope);
+  return finalizeDashboardSync(supabase, pending, notifyFilters, scope, {
+    fast: true,
+    preArchived: archived,
+  });
 }
 
 /** Un lote de sincronización (≈30–50 s navegador / ≈260 s servidor). */
@@ -1249,7 +1237,7 @@ export async function runDashboardSyncBatch(
     return buildBatchResult(pending, false, "compra_agil");
   }
 
-  const batchBudgetMs = options.serverSide ? MANUAL_SERVER_BATCH_BUDGET_MS : SYNC_BATCH_BUDGET_MS;
+  const batchBudgetMs = options.serverSide ? MANUAL_SYNC_BUDGET_MS : SYNC_BATCH_BUDGET_MS;
   const batchSize = options.serverSide ? MANUAL_CANDIDATE_CAP : SYNC_BATCH_SIZE;
 
   const batchStarted = Date.now();

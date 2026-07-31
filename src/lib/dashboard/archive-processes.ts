@@ -75,6 +75,57 @@ async function loadActivePipelineIds(processIds: string[]): Promise<Set<string>>
   return pipelineIds;
 }
 
+async function archiveExpiredDashboardBatch(): Promise<number> {
+  const supabase = createServiceClient();
+  const nowIso = new Date().toISOString();
+
+  const { data: rows, error } = await supabase
+    .from("processes")
+    .select(
+      "id, estado, adjudicado_a_mi, adjudicado_rut, fecha_cierre, hora_cierre, dashboard_archived_at"
+    )
+    .eq("organization_id", DEFAULT_ORG_ID)
+    .eq("synced_via_dashboard", true)
+    .is("dashboard_archived_at", null)
+    .not("fecha_cierre", "is", null)
+    .lte("fecha_cierre", nowIso)
+    .order("fecha_cierre", { ascending: true })
+    .limit(ARCHIVE_SCAN_BATCH);
+
+  if (error) throw new Error(error.message);
+  if (!rows?.length) return 0;
+
+  const ids = rows.map((r) => r.id as string);
+  const pipelineIds = await loadActivePipelineIds(ids);
+
+  const toArchive = rows.filter((row) =>
+    shouldArchiveDashboardProcess({
+      id: row.id as string,
+      estado: row.estado as string | null,
+      adjudicado_a_mi: Boolean(row.adjudicado_a_mi),
+      adjudicado_rut: row.adjudicado_rut as string | null,
+      fecha_cierre: row.fecha_cierre as string | null,
+      hora_cierre: row.hora_cierre as string | null,
+      dashboard_archived_at: row.dashboard_archived_at as string | null,
+      en_pipeline: pipelineIds.has(row.id as string),
+    })
+  );
+
+  if (toArchive.length === 0) return 0;
+
+  const now = new Date().toISOString();
+  const { error: updateError } = await supabase
+    .from("processes")
+    .update({ dashboard_archived_at: now, updated_at: now })
+    .in(
+      "id",
+      toArchive.map((r) => r.id as string)
+    );
+
+  if (updateError) throw new Error(updateError.message);
+  return toArchive.length;
+}
+
 async function archiveStaleDashboardBatch(): Promise<number> {
   const supabase = createServiceClient();
 
@@ -125,7 +176,12 @@ async function archiveStaleDashboardBatch(): Promise<number> {
 /** Mueve procesos terminales / cierre vencido (sin CRM) al historial. */
 export async function archiveStaleDashboardProcesses(): Promise<{ archived: number }> {
   let archived = 0;
-  for (let round = 0; round < 30; round += 1) {
+  for (let round = 0; round < 20; round += 1) {
+    const batch = await archiveExpiredDashboardBatch();
+    archived += batch;
+    if (batch === 0) break;
+  }
+  for (let round = 0; round < 10; round += 1) {
     const batch = await archiveStaleDashboardBatch();
     archived += batch;
     if (batch === 0) break;

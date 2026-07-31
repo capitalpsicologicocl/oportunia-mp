@@ -137,7 +137,8 @@ export function SyncMercadoPublicoButton({
         body: JSON.stringify({ scope }),
       });
 
-      const data = (await res.json()) as {
+      const raw = await res.text();
+      let data: {
         ok?: boolean;
         error?: string;
         done?: boolean;
@@ -150,6 +151,15 @@ export function SyncMercadoPublicoButton({
           mode?: string;
         };
       };
+      try {
+        data = JSON.parse(raw) as typeof data;
+      } catch {
+        throw new Error(
+          res.status === 504 || res.status === 502
+            ? "El servidor tardó demasiado (timeout). Intenta de nuevo; si persiste, revisa Ajustes → ticket MP."
+            : `Respuesta inválida del servidor (${res.status}): ${raw.slice(0, 100)}`
+        );
+      }
 
       if (!res.ok || !data.ok) {
         throw new Error(data.error ?? `Error HTTP ${res.status}`);
@@ -239,8 +249,8 @@ export function SyncMercadoPublicoButton({
       {!isFirstSync && !loading && (
         <p className="text-xs text-muted-foreground">
           {isCa
-            ? "Sync en servidor: archiva vencidos, busca novedades recientes y actualiza el dashboard (1–3 min)."
-            : "Sync en servidor: busca licitaciones recientes y actualiza el dashboard (1–3 min). Cron nocturno 00:01."}
+            ? "Sync en servidor: archiva vencidos y busca novedades (~1–2 min). Usa «Actualizar estados (página)» para refrescar filas visibles."
+            : "Sync en servidor: busca licitaciones recientes (~1–2 min). Cron nocturno 00:01."}
         </p>
       )}
       {result && (
