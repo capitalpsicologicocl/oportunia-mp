@@ -216,6 +216,47 @@ async function updateLastMpSyncAt(
   if (error) throw new Error(error.message);
 }
 
+/** Marca avance del cron aunque la cola siga pendiente (sync parcial nocturna). */
+async function touchCronSyncTimestamp(scope: Exclude<SyncScope, "all">): Promise<void> {
+  const supabase = createServiceClient();
+  const sourceCol =
+    scope === "compra_agil" ? "last_mp_sync_ca_cron_at" : "last_mp_sync_lic_cron_at";
+  const now = new Date().toISOString();
+  await supabase
+    .from("org_settings")
+    .update({ [sourceCol]: now, updated_at: now })
+    .eq("organization_id", DEFAULT_ORG_ID);
+}
+
+const CRON_CA_CANDIDATE_CAP = 60;
+const CRON_CA_KEYWORDS_PER_BATCH = 4;
+
+async function preparePendingForCron(
+  supabase: ReturnType<typeof createServiceClient>,
+  scope: Exclude<SyncScope, "all">,
+  pending: MpSyncPending
+): Promise<MpSyncPending> {
+  pending.cron_run = true;
+
+  if (pending.index > 0) {
+    pending.candidates = pending.candidates.slice(pending.index);
+    pending.index = 0;
+    pending.fetched = pending.candidates.length;
+  }
+
+  if (scope === "compra_agil" && pending.ca_discover_mode === "nightly") {
+    pending.ca_keywords_skipped = true;
+  }
+
+  if (pending.candidates.length > CRON_CA_CANDIDATE_CAP) {
+    pending.candidates = pending.candidates.slice(0, CRON_CA_CANDIDATE_CAP);
+    pending.fetched = pending.candidates.length;
+  }
+
+  await saveMpSyncPending(supabase, scope, pending);
+  return pending;
+}
+
 async function closeStaleSyncRuns(supabase: ReturnType<typeof createServiceClient>) {
   await supabase
     .from("sync_runs")
@@ -418,7 +459,14 @@ function resolveCaPublicadoDesdeIso(
   const windowMs = MP_INITIAL_SYNC_HOURS * 60 * 60 * 1000;
   const overlapMs = MP_SYNC_OVERLAP_HOURS * 60 * 60 * 1000;
 
-  if (mode === "initial" || mode === "nightly") {
+  if (mode === "initial") {
+    return chileDateIso(new Date(Date.now() - windowMs));
+  }
+
+  if (mode === "nightly") {
+    if (lastSyncAt) {
+      return chileDateIso(new Date(new Date(lastSyncAt).getTime() - overlapMs));
+    }
     return chileDateIso(new Date(Date.now() - windowMs));
   }
 
@@ -546,6 +594,7 @@ interface MpSyncPending {
   ca_discover_mode?: CaDiscoverMode;
   ca_publicado_desde?: string;
   ca_recent_scanned?: boolean;
+  ca_keywords_skipped?: boolean;
   cron_run?: boolean;
   candidates_prioritized?: boolean;
   finalized?: boolean;
@@ -769,8 +818,13 @@ async function appendCompraAgilCandidates(
 
   const terms = pending.ca_search_terms;
   const offset = pending.ca_term_offset ?? 0;
+  const keywordBatchSize = pending.cron_run ? CRON_CA_KEYWORDS_PER_BATCH : MP_CA_KEYWORDS_PER_BATCH;
 
-  if (offset < terms.length) {
+  if (pending.cron_run && discoverMode === "nightly") {
+    pending.ca_keywords_skipped = true;
+  }
+
+  if (!pending.ca_keywords_skipped && offset < terms.length) {
     try {
       const batch = await fetchCompraAgilForTerms(
         ticket,
@@ -778,12 +832,15 @@ async function appendCompraAgilCandidates(
         MP_CA_PAGES_PER_KEYWORD,
         {
           startIndex: offset,
-          batchSize: MP_CA_KEYWORDS_PER_BATCH,
+          batchSize: keywordBatchSize,
           publicadoDesde,
         }
       );
       for (const normalized of batch) {
         if (countCandidatesByTipo(pending, "compra_agil") >= MP_CA_CANDIDATE_MAX) break;
+        if (pending.cron_run && countCandidatesByTipo(pending, "compra_agil") >= CRON_CA_CANDIDATE_CAP) {
+          break;
+        }
         if (!passesCaDiscoverFilter(normalized, notifyFilters)) continue;
         appendCaCandidate(pending, normalized, seen);
       }
@@ -791,12 +848,18 @@ async function appendCompraAgilCandidates(
       onError(`Compra ágil (keywords): ${err instanceof Error ? err.message : "Error"}`);
     }
 
-    pending.ca_term_offset = offset + MP_CA_KEYWORDS_PER_BATCH;
+    pending.ca_term_offset = offset + keywordBatchSize;
+    if (pending.cron_run && (pending.ca_term_offset ?? 0) >= 16) {
+      pending.ca_term_offset = terms.length;
+      pending.ca_keywords_skipped = true;
+    }
+  } else if (pending.ca_keywords_skipped && offset < terms.length) {
+    pending.ca_term_offset = terms.length;
   }
 
   if ((pending.ca_term_offset ?? 0) >= terms.length && !pending.ca_recent_scanned) {
     try {
-      const maxPages = pending.cron_run ? 6 : 3;
+      const maxPages = pending.cron_run ? 4 : 3;
       const rawItems = await fetchCompraAgilPublishedSince(ticket, publicadoDesde, maxPages);
       for (const raw of rawItems) {
         if (countCandidatesByTipo(pending, "compra_agil") >= MP_CA_CANDIDATE_MAX) break;
@@ -901,6 +964,7 @@ async function initCaSyncPending(
     ca_discover_mode: discoverMode,
     ca_publicado_desde: compraAgilPublicadoDesdeIso(lastSyncAt, discoverMode),
     cron_run: options?.cron ?? false,
+    ca_keywords_skipped: Boolean(options?.cron && lastSyncAt),
     light,
   };
 }
@@ -938,6 +1002,7 @@ export async function runDashboardSyncBatch(
   if (!pending) {
     await closeStaleSyncRuns(supabase);
     if (!continueBatch) {
+      await saveMpSyncPending(supabase, scope, null);
       await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }));
     }
     if (scope === "compra_agil") {
@@ -948,7 +1013,7 @@ export async function runDashboardSyncBatch(
       const discovered = await discoverSyncCandidates(
         ticket,
         notifyFilters,
-        cron ? null : lastSyncAt,
+        lastSyncAt,
         (msg) => discoverErrors.push(msg)
       );
       pending = discovered.pending;
@@ -1056,6 +1121,7 @@ export async function runDashboardSyncCron(options?: {
 
   const summaries: Partial<Record<Exclude<SyncScope, "all">, IngestSummary>> = {};
   let partial = false;
+  const scopesTouched = new Set<Exclude<SyncScope, "all">>();
 
   for (const scope of ["compra_agil", "licitacion"] as const) {
     if (Date.now() >= deadline) {
@@ -1064,11 +1130,19 @@ export async function runDashboardSyncCron(options?: {
     }
 
     const existing = await loadMpSyncPending(supabase, scope);
+    if (existing && !existing.finalized) {
+      await preparePendingForCron(supabase, scope, existing);
+    }
+
     let continueBatch = Boolean(existing && !existing.finalized);
 
     while (Date.now() < deadline) {
       const result = await runDashboardSyncBatch({ continueBatch, scope, cron: true });
       continueBatch = true;
+      scopesTouched.add(scope);
+      if (result.summary.created > 0 || result.summary.updated > 0 || result.done) {
+        await touchCronSyncTimestamp(scope).catch(() => undefined);
+      }
       if (result.done) {
         summaries[scope] = result.summary;
         break;
@@ -1078,6 +1152,16 @@ export async function runDashboardSyncCron(options?: {
 
     if (!summaries[scope]) {
       partial = true;
+      const pending = await loadMpSyncPending(supabase, scope);
+      if (pending && !pending.finalized && pending.index > 0) {
+        await preparePendingForCron(supabase, scope, pending);
+      }
+    }
+  }
+
+  if (scopesTouched.size > 0) {
+    for (const scope of scopesTouched) {
+      await touchCronSyncTimestamp(scope).catch(() => undefined);
     }
   }
 

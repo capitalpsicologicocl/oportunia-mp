@@ -3,6 +3,14 @@
     {
       "path": "/api/cron/ingest",
       "schedule": "1 4 * * *"
+    },
+    {
+      "path": "/api/cron/ingest",
+      "schedule": "31 4 * * *"
+    },
+    {
+      "path": "/api/cron/ingest",
+      "schedule": "1 5 * * *"
     }
   ]
 }

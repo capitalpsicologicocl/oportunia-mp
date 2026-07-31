@@ -15,6 +15,7 @@ export function SyncMercadoPublicoButton({
   lastCronAttemptLabel: lastCronAttemptLabelProp,
   lastCronError: lastCronErrorProp,
   lastCronSummaryPartial: lastCronSummaryPartialProp,
+  lastCronSummaryText: lastCronSummaryTextProp,
 }: {
   scope: Exclude<SyncScope, "all">;
   isFirstSync?: boolean;
@@ -24,6 +25,7 @@ export function SyncMercadoPublicoButton({
   lastCronAttemptLabel?: string;
   lastCronError?: string | null;
   lastCronSummaryPartial?: boolean | null;
+  lastCronSummaryText?: string | null;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -38,6 +40,7 @@ export function SyncMercadoPublicoButton({
     lastCronAttemptLabel: "Nunca",
     lastCronError: null as string | null,
     lastCronSummaryPartial: null as boolean | null,
+    lastCronSummaryText: null as string | null,
   });
 
   useEffect(() => {
@@ -60,6 +63,7 @@ export function SyncMercadoPublicoButton({
           lastCronAttemptLabel?: string;
           lastCronError?: string | null;
           lastCronSummaryPartial?: boolean | null;
+          lastCronSummaryText?: string | null;
         }) => {
           setSyncMeta({
             isFirstSync: data.isFirstSync ?? true,
@@ -69,6 +73,7 @@ export function SyncMercadoPublicoButton({
             lastCronAttemptLabel: data.lastCronAttemptLabel ?? "Nunca",
             lastCronError: data.lastCronError ?? null,
             lastCronSummaryPartial: data.lastCronSummaryPartial ?? null,
+            lastCronSummaryText: data.lastCronSummaryText ?? null,
           });
         }
       )
@@ -89,6 +94,7 @@ export function SyncMercadoPublicoButton({
   const lastCronError = lastCronErrorProp ?? syncMeta.lastCronError;
   const lastCronSummaryPartial =
     lastCronSummaryPartialProp ?? syncMeta.lastCronSummaryPartial;
+  const lastCronSummaryText = lastCronSummaryTextProp ?? syncMeta.lastCronSummaryText;
 
   async function handleSync() {
     setLoading(true);
@@ -245,6 +251,9 @@ export function SyncMercadoPublicoButton({
               <span className="text-amber-700"> · parcial</span>
             )}
           </p>
+          {lastCronSummaryText && (
+            <p className="text-[10px] text-muted-foreground">Último cron: {lastCronSummaryText}</p>
+          )}
           {lastCronSyncLabel === "Nunca" && lastCronAttemptLabel !== "Nunca" && (
             <p className="text-[10px] text-amber-800">
               Cron intentó: {lastCronAttemptLabel}

@@ -144,6 +144,7 @@ export async function renderTipoDashboard({
           lastCronAttemptLabel={syncStatus.lastCronAttemptLabel}
           lastCronError={syncStatus.lastCronError}
           lastCronSummaryPartial={syncStatus.lastCronSummaryPartial}
+          lastCronSummaryText={syncStatus.lastCronSummaryText}
         />
 
         {syncStatus.hasSyncedData && (

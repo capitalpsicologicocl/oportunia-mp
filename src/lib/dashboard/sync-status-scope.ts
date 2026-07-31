@@ -12,6 +12,7 @@ export async function getMpSyncStatusForScope(
   lastCronAttemptAt: string | null;
   lastCronError: string | null;
   lastCronSummaryPartial: boolean | null;
+  lastCronSummaryText: string | null;
   hasSyncedData: boolean;
   isFirstSync: boolean;
   lastSyncLabel: string;
@@ -49,9 +50,25 @@ export async function getMpSyncStatusForScope(
   const lastCronSyncAt = row?.[cronCol] ?? null;
   const lastCronAttemptAt = (row?.last_cron_attempt_at as string | null) ?? null;
   const lastCronError = (row?.last_cron_error as string | null) ?? null;
-  const cronSummary = row?.last_cron_summary as { partial?: boolean } | null;
+  const cronSummary = row?.last_cron_summary as {
+    partial?: boolean;
+    created?: number;
+    updated?: number;
+    archived?: number;
+  } | null;
   const lastCronSummaryPartial =
     typeof cronSummary?.partial === "boolean" ? cronSummary.partial : null;
+
+  const summaryParts: string[] = [];
+  if (cronSummary?.created) summaryParts.push(`${cronSummary.created} nuevos`);
+  if (cronSummary?.updated) summaryParts.push(`${cronSummary.updated} actualizados`);
+  if (cronSummary?.archived) summaryParts.push(`${cronSummary.archived} archivados`);
+  const lastCronSummaryText =
+    summaryParts.length > 0
+      ? `${lastCronSummaryPartial ? "parcial · " : ""}${summaryParts.join(" · ")}`
+      : lastCronSummaryPartial
+        ? "parcial (cola pendiente)"
+        : null;
 
   return {
     lastSyncAt,
@@ -60,6 +77,7 @@ export async function getMpSyncStatusForScope(
     lastCronAttemptAt,
     lastCronError,
     lastCronSummaryPartial,
+    lastCronSummaryText,
     hasSyncedData: (count ?? 0) > 0,
     isFirstSync: !lastSyncAt,
     lastSyncLabel: formatLastSyncCL(lastSyncAt),
