@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { SyncScope } from "@/lib/ingest/sync-refresh";
@@ -32,6 +32,7 @@ export function SyncMercadoPublicoButton({
   const [progress, setProgress] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const sessionKeepAlive = useRef<ReturnType<typeof setInterval> | null>(null);
   const [syncMeta, setSyncMeta] = useState({
     isFirstSync: true,
     lastSyncLabel: "Nunca",
@@ -86,6 +87,14 @@ export function SyncMercadoPublicoButton({
     scope,
   ]);
 
+  useEffect(() => {
+    return () => {
+      if (sessionKeepAlive.current) {
+        clearInterval(sessionKeepAlive.current);
+      }
+    };
+  }, []);
+
   const isFirstSync = isFirstSyncProp ?? syncMeta.isFirstSync;
   const lastSyncLabel = lastSyncLabelProp ?? syncMeta.lastSyncLabel;
   const lastManualSyncLabel = lastManualSyncLabelProp ?? syncMeta.lastManualSyncLabel;
@@ -96,108 +105,68 @@ export function SyncMercadoPublicoButton({
     lastCronSummaryPartialProp ?? syncMeta.lastCronSummaryPartial;
   const lastCronSummaryText = lastCronSummaryTextProp ?? syncMeta.lastCronSummaryText;
 
+  function startSessionKeepAlive() {
+    if (sessionKeepAlive.current) clearInterval(sessionKeepAlive.current);
+    sessionKeepAlive.current = setInterval(() => {
+      void fetch("/api/auth/refresh", { method: "POST" }).catch(() => undefined);
+    }, 3 * 60 * 1000);
+  }
+
+  function stopSessionKeepAlive() {
+    if (sessionKeepAlive.current) {
+      clearInterval(sessionKeepAlive.current);
+      sessionKeepAlive.current = null;
+    }
+  }
+
   async function handleSync() {
     setLoading(true);
     setError(null);
     setResult(null);
-    setProgress("Conectando con Mercado Público…");
-
-    let continueBatch = false;
-    let guard = 0;
-    let networkRetries = 0;
-    let aggregated = { fetched: 0, created: 0, updated: 0, archived: 0, errors: [] as string[] };
-    let modeLabel = "";
-
-    const phaseLabel = (phase?: string) => {
-      switch (phase) {
-        case "discover":
-          return "Buscando licitaciones por fecha…";
-        case "compra_agil":
-          return "Buscando Compra Ágil (72 h + keywords)…";
-        case "finalize":
-          return "Completando fechas y estados…";
-        case "enrich":
-        default:
-          return null;
-      }
-    };
+    setProgress(
+      isFirstSync
+        ? "Sincronización inicial en servidor (puede tardar 2–3 min)…"
+        : "Actualizando dashboard en servidor (1–3 min)…"
+    );
+    startSessionKeepAlive();
 
     try {
-      while (guard < 200) {
-        let res: Response;
-        try {
-          res = await fetch("/api/ingest/sync", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ continue: continueBatch, scope }),
-          });
-          networkRetries = 0;
-        } catch (fetchErr) {
-          const fetchMsg = fetchErr instanceof Error ? fetchErr.message : "Error";
-          if (fetchMsg === "Failed to fetch" && networkRetries < 6) {
-            networkRetries += 1;
-            continueBatch = true;
-            setProgress(`Reconectando (${networkRetries}/6)…`);
-            await new Promise((r) => setTimeout(r, 2500));
-            continue;
-          }
-          throw fetchErr;
-        }
+      const res = await fetch("/api/ingest/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope }),
+      });
 
-        const data = (await res.json()) as {
-          ok?: boolean;
-          error?: string;
-          done?: boolean;
-          phase?: string;
-          summary?: {
-            fetched: number;
-            created: number;
-            updated: number;
-            archived?: number;
-            errors: string[];
-            mode?: string;
-          };
-          progress?: { total: number; processed: number };
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        done?: boolean;
+        summary?: {
+          fetched: number;
+          created: number;
+          updated: number;
+          archived?: number;
+          errors: string[];
+          mode?: string;
         };
+      };
 
-        if (!res.ok || !data.ok) {
-          throw new Error(data.error ?? `Error HTTP ${res.status}`);
-        }
-
-        const s = data.summary!;
-        aggregated = {
-          fetched: s.fetched,
-          created: s.created,
-          updated: s.updated,
-          archived: s.archived ?? aggregated.archived,
-          errors: s.errors ?? [],
-        };
-        modeLabel =
-          s.mode === "initial"
-            ? "carga inicial (72 h)"
-            : aggregated.fetched === 0
-              ? "actualización rápida (sin cola pendiente)"
-              : "actualización incremental";
-
-        const phaseText = phaseLabel(data.phase);
-        if (data.progress && data.progress.total > 0) {
-          setProgress(
-            phaseText ??
-              `Procesando ${data.progress.processed} de ${data.progress.total}…`
-          );
-        } else if (phaseText) {
-          setProgress(phaseText);
-        }
-
-        if (data.done) break;
-        continueBatch = true;
-        guard += 1;
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error ?? `Error HTTP ${res.status}`);
       }
 
-      const avisos = aggregated.errors.filter(Boolean);
+      const s = data.summary!;
+      const avisos = (s.errors ?? []).filter(Boolean);
+      const modeLabel =
+        s.mode === "initial"
+          ? "carga inicial"
+          : s.fetched === 0
+            ? "actualización rápida"
+            : "actualización incremental";
+
       setResult(
-        `${modeLabel}: ${aggregated.fetched} en cola · ${aggregated.created} nuevos · ${aggregated.updated} actualizados` +
-          (aggregated.archived > 0 ? ` · ${aggregated.archived} archivados al historial` : "") +
+        `${modeLabel}: ${s.fetched} revisados · ${s.created} nuevos · ${s.updated} actualizados` +
+          (s.archived && s.archived > 0 ? ` · ${s.archived} archivados` : "") +
           (avisos.length ? ` · ${avisos.length} avisos` : "")
       );
       if (avisos.length) {
@@ -207,15 +176,14 @@ export function SyncMercadoPublicoButton({
       router.refresh();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Error";
-      if (msg === "Failed to fetch") {
-        setError(
-          "Se perdió la conexión (timeout). Pulsa Sincronizar de nuevo; retomará la cola pendiente."
-        );
-      } else {
-        setError(msg);
-      }
+      setError(
+        msg === "Failed to fetch"
+          ? "Timeout de red. Vuelve a pulsar Sincronizar; el servidor retoma automáticamente."
+          : msg
+      );
       setProgress(null);
     } finally {
+      stopSessionKeepAlive();
       setLoading(false);
     }
   }
@@ -271,8 +239,8 @@ export function SyncMercadoPublicoButton({
       {!isFirstSync && !loading && (
         <p className="text-xs text-muted-foreground">
           {isCa
-            ? "Busca Compra Ágil desde la última sync (o 72 h la primera vez). Cron nocturno 00:01."
-            : "Busca licitaciones desde la última sync (o 72 h la primera vez). Cron nocturno 00:01."}
+            ? "Sync en servidor: archiva vencidos, busca novedades recientes y actualiza el dashboard (1–3 min)."
+            : "Sync en servidor: busca licitaciones recientes y actualiza el dashboard (1–3 min). Cron nocturno 00:01."}
         </p>
       )}
       {result && (

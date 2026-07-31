@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/session";
-import { runDashboardSyncBatch } from "@/lib/ingest/service";
+import { runFastManualSync } from "@/lib/ingest/service";
 import type { SyncScope } from "@/lib/ingest/sync-refresh";
 
 export const runtime = "nodejs";
@@ -18,15 +18,11 @@ export async function POST(request: NextRequest) {
   }
 
   const body = (await request.json().catch(() => ({}))) as {
-    continue?: boolean;
     scope?: string;
   };
 
   try {
-    const batch = await runDashboardSyncBatch({
-      continueBatch: body.continue === true,
-      scope: parseScope(body.scope),
-    });
+    const batch = await runFastManualSync(parseScope(body.scope));
     return NextResponse.json({ ok: true, ...batch });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Error desconocido";
