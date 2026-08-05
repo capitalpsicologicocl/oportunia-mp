@@ -249,7 +249,7 @@ export function SyncMercadoPublicoButton({
       {!isFirstSync && !loading && (
         <p className="text-xs text-muted-foreground">
           {isCa
-            ? "Sync en servidor: archiva vencidos y busca novedades (~1–2 min). Usa «Actualizar estados (página)» para refrescar filas visibles."
+            ? "Sync en servidor: busca por tus keywords/rubros (como MP) y novedades recientes (~2–3 min)."
             : "Sync en servidor: busca licitaciones recientes (~1–2 min). Cron nocturno 00:01."}
         </p>
       )}

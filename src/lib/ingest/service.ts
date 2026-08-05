@@ -245,7 +245,7 @@ async function preparePendingForCron(
   }
 
   if (scope === "compra_agil" && pending.ca_discover_mode === "nightly") {
-    pending.ca_keywords_skipped = true;
+    pending.ca_keywords_skipped = false;
   }
 
   if (pending.candidates.length > CRON_CA_CANDIDATE_CAP) {
@@ -821,7 +821,7 @@ async function appendCompraAgilCandidates(
   const keywordBatchSize = pending.cron_run ? CRON_CA_KEYWORDS_PER_BATCH : MP_CA_KEYWORDS_PER_BATCH;
 
   if (pending.cron_run && discoverMode === "nightly") {
-    pending.ca_keywords_skipped = true;
+    pending.ca_keywords_skipped = false;
   }
 
   if (!pending.ca_keywords_skipped && offset < terms.length) {
@@ -975,7 +975,7 @@ async function initCaSyncPending(
     ca_discover_mode: discoverMode,
     ca_publicado_desde: compraAgilPublicadoDesdeIso(lastSyncAt, discoverMode),
     cron_run: options?.cron ?? false,
-    ca_keywords_skipped: Boolean(lastSyncAt),
+    ca_keywords_skipped: false,
     light,
   };
 }
@@ -989,10 +989,11 @@ export interface DashboardSyncBatchOptions {
 }
 
 const MANUAL_SYNC_BUDGET_MS = 240_000;
-const MANUAL_CANDIDATE_CAP = 25;
+const MANUAL_CANDIDATE_CAP = 50;
 const MANUAL_ENRICH_CONCURRENCY = 4;
-const MANUAL_ENRICH_MAX_MS = 90_000;
-const MANUAL_INITIAL_KEYWORD_TERMS = 12;
+const MANUAL_ENRICH_MAX_MS = 120_000;
+const MANUAL_KEYWORD_TERMS_PER_SYNC = 28;
+const MANUAL_INITIAL_KEYWORD_TERMS = 32;
 
 async function discoverFastCaCandidates(
   ticket: string,
@@ -1003,12 +1004,25 @@ async function discoverFastCaCandidates(
   const mode: CaDiscoverMode = lastSyncAt ? "incremental" : "initial";
   const publicadoDesde = compraAgilPublicadoDesdeIso(lastSyncAt, mode);
   const seen = new Set<string>();
+  const fromKeywordApi = new Set<string>();
   const candidates: MpSyncPending["candidates"] = [];
 
-  const add = (process: NormalizedProcess) => {
+  const add = (process: NormalizedProcess, trustedKeywordHit = false) => {
     if (seen.has(process.codigo_externo)) return;
     if (candidates.length >= MANUAL_CANDIDATE_CAP) return;
-    if (!passesCaDiscoverFilter(process, notifyFilters)) return;
+
+    const fullText = buildProcessSearchText({
+      nombre: process.nombre,
+      servicios_requeridos: process.servicios_requeridos,
+      descripcion: process.descripcion,
+    });
+    if (isExcluded(fullText)) return;
+
+    const matches =
+      trustedKeywordHit ||
+      passesCaDiscoverFilter(process, notifyFilters);
+    if (!matches) return;
+
     seen.add(process.codigo_externo);
     candidates.push({
       codigo_externo: process.codigo_externo,
@@ -1017,30 +1031,48 @@ async function discoverFastCaCandidates(
     });
   };
 
+  const terms = buildCompraAgilSearchTerms(notifyFilters.keywords, notifyFilters.rubros);
+  const keywordBatchSize = lastSyncAt ? MANUAL_KEYWORD_TERMS_PER_SYNC : MANUAL_INITIAL_KEYWORD_TERMS;
+
   try {
-    const pages = lastSyncAt ? 3 : 5;
+    const batch = await fetchCompraAgilForTerms(ticket, terms, MP_CA_PAGES_PER_KEYWORD, {
+      startIndex: 0,
+      batchSize: keywordBatchSize,
+      publicadoDesde,
+    });
+    for (const normalized of batch) {
+      fromKeywordApi.add(normalized.codigo_externo);
+      add(normalized, true);
+    }
+  } catch (err) {
+    onError(`Compra ágil (keywords/rubros): ${err instanceof Error ? err.message : "Error"}`);
+  }
+
+  if (lastSyncAt && candidates.length < MANUAL_CANDIDATE_CAP && terms.length > keywordBatchSize) {
+    try {
+      const batch2 = await fetchCompraAgilForTerms(ticket, terms, MP_CA_PAGES_PER_KEYWORD, {
+        startIndex: keywordBatchSize,
+        batchSize: 16,
+        publicadoDesde,
+      });
+      for (const normalized of batch2) {
+        fromKeywordApi.add(normalized.codigo_externo);
+        add(normalized, true);
+      }
+    } catch (err) {
+      onError(`Compra ágil (keywords lote 2): ${err instanceof Error ? err.message : "Error"}`);
+    }
+  }
+
+  try {
+    const pages = lastSyncAt ? 6 : 8;
     const rawItems = await fetchCompraAgilPublishedSince(ticket, publicadoDesde, pages);
     for (const raw of rawItems) {
-      add(normalizeCompraAgil(raw));
+      const normalized = normalizeCompraAgil(raw);
+      add(normalized, fromKeywordApi.has(normalized.codigo_externo));
     }
   } catch (err) {
     onError(`Compra ágil (listado reciente): ${err instanceof Error ? err.message : "Error"}`);
-  }
-
-  if (!lastSyncAt && candidates.length < MANUAL_CANDIDATE_CAP) {
-    const terms = buildCompraAgilSearchTerms(notifyFilters.keywords, notifyFilters.rubros);
-    try {
-      const batch = await fetchCompraAgilForTerms(ticket, terms, MP_CA_PAGES_PER_KEYWORD, {
-        startIndex: 0,
-        batchSize: MANUAL_INITIAL_KEYWORD_TERMS,
-        publicadoDesde,
-      });
-      for (const normalized of batch) {
-        add(normalized);
-      }
-    } catch (err) {
-      onError(`Compra ágil (keywords): ${err instanceof Error ? err.message : "Error"}`);
-    }
   }
 
   const supabase = createServiceClient();
