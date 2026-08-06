@@ -986,227 +986,65 @@ export interface DashboardSyncBatchOptions {
   cron?: boolean;
   /** Usa presupuesto largo (servidor) en lugar de lote corto (navegador). */
   serverSide?: boolean;
+  /** Tope de ms por lote dentro de una request (evita timeout Vercel 300 s). */
+  maxBatchMs?: number;
 }
 
+/** Presupuesto total por click de sync manual (una request HTTP). */
+const MANUAL_SYNC_REQUEST_MAX_MS = 268_000;
+/** Ms máximos por lote dentro del bucle manual (varias vueltas por request). */
+const MANUAL_SYNC_LOOP_BATCH_MS = 48_000;
 const MANUAL_SYNC_BUDGET_MS = 240_000;
 const MANUAL_CANDIDATE_CAP = 50;
-const MANUAL_ENRICH_CONCURRENCY = 4;
-const MANUAL_ENRICH_MAX_MS = 120_000;
-const MANUAL_KEYWORD_TERMS_PER_SYNC = 28;
-const MANUAL_INITIAL_KEYWORD_TERMS = 32;
-
-async function discoverFastCaCandidates(
-  ticket: string,
-  notifyFilters: Awaited<ReturnType<typeof loadOrgContentFilters>>,
-  lastSyncAt: string | null,
-  onError: (msg: string) => void
-): Promise<MpSyncPending["candidates"]> {
-  const mode: CaDiscoverMode = lastSyncAt ? "incremental" : "initial";
-  const publicadoDesde = compraAgilPublicadoDesdeIso(lastSyncAt, mode);
-  const seen = new Set<string>();
-  const fromKeywordApi = new Set<string>();
-  const candidates: MpSyncPending["candidates"] = [];
-
-  const add = (process: NormalizedProcess, trustedKeywordHit = false) => {
-    if (seen.has(process.codigo_externo)) return;
-    if (candidates.length >= MANUAL_CANDIDATE_CAP) return;
-
-    const fullText = buildProcessSearchText({
-      nombre: process.nombre,
-      servicios_requeridos: process.servicios_requeridos,
-      descripcion: process.descripcion,
-    });
-    if (isExcluded(fullText)) return;
-
-    const matches =
-      trustedKeywordHit ||
-      passesCaDiscoverFilter(process, notifyFilters);
-    if (!matches) return;
-
-    seen.add(process.codigo_externo);
-    candidates.push({
-      codigo_externo: process.codigo_externo,
-      tipo: process.tipo,
-      nombre: process.nombre,
-    });
-  };
-
-  const terms = buildCompraAgilSearchTerms(notifyFilters.keywords, notifyFilters.rubros);
-  const keywordBatchSize = lastSyncAt ? MANUAL_KEYWORD_TERMS_PER_SYNC : MANUAL_INITIAL_KEYWORD_TERMS;
-
-  try {
-    const batch = await fetchCompraAgilForTerms(ticket, terms, MP_CA_PAGES_PER_KEYWORD, {
-      startIndex: 0,
-      batchSize: keywordBatchSize,
-      publicadoDesde,
-    });
-    for (const normalized of batch) {
-      fromKeywordApi.add(normalized.codigo_externo);
-      add(normalized, true);
-    }
-  } catch (err) {
-    onError(`Compra ágil (keywords/rubros): ${err instanceof Error ? err.message : "Error"}`);
-  }
-
-  if (lastSyncAt && candidates.length < MANUAL_CANDIDATE_CAP && terms.length > keywordBatchSize) {
-    try {
-      const batch2 = await fetchCompraAgilForTerms(ticket, terms, MP_CA_PAGES_PER_KEYWORD, {
-        startIndex: keywordBatchSize,
-        batchSize: 16,
-        publicadoDesde,
-      });
-      for (const normalized of batch2) {
-        fromKeywordApi.add(normalized.codigo_externo);
-        add(normalized, true);
-      }
-    } catch (err) {
-      onError(`Compra ágil (keywords lote 2): ${err instanceof Error ? err.message : "Error"}`);
-    }
-  }
-
-  try {
-    const pages = lastSyncAt ? 6 : 8;
-    const rawItems = await fetchCompraAgilPublishedSince(ticket, publicadoDesde, pages);
-    for (const raw of rawItems) {
-      const normalized = normalizeCompraAgil(raw);
-      add(normalized, fromKeywordApi.has(normalized.codigo_externo));
-    }
-  } catch (err) {
-    onError(`Compra ágil (listado reciente): ${err instanceof Error ? err.message : "Error"}`);
-  }
-
-  const supabase = createServiceClient();
-  return filterCandidatesNeedingSync(supabase, candidates, { light: true });
-}
-
-async function discoverFastLicCandidates(
-  ticket: string,
-  notifyFilters: Awaited<ReturnType<typeof loadOrgContentFilters>>,
-  lastSyncAt: string | null,
-  onError: (msg: string) => void
-): Promise<MpSyncPending["candidates"]> {
-  const { dates } = buildSyncDateRange(lastSyncAt);
-  const queryDates = lastSyncAt ? dates.slice(-3) : dates.slice(-7);
-  const licitacionesList = await fetchLicitacionesForDates(ticket, queryDates, onError);
-
-  const seen = new Set<string>();
-  let candidates: MpSyncPending["candidates"] = [];
-  for (const process of licitacionesList) {
-    if (seen.has(process.codigo_externo)) continue;
-    if (candidates.length >= MANUAL_CANDIDATE_CAP) break;
-    if (!passesLicitacionDiscoverFilter(process, notifyFilters)) continue;
-    seen.add(process.codigo_externo);
-    candidates.push({
-      codigo_externo: process.codigo_externo,
-      tipo: process.tipo,
-      nombre: process.nombre,
-    });
-  }
-
-  const supabase = createServiceClient();
-  candidates = await filterCandidatesNeedingSync(supabase, candidates, { light: true });
-  return candidates;
-}
-
-async function enrichCandidatesParallel(
-  ticket: string,
-  supabase: ReturnType<typeof createServiceClient>,
-  orgRut: string | null,
-  pending: MpSyncPending,
-  notifyFilters: Awaited<ReturnType<typeof loadOrgContentFilters>>,
-  deadlineMs: number
-): Promise<void> {
-  while (pending.index < pending.candidates.length && Date.now() < deadlineMs) {
-    const chunk = pending.candidates.slice(
-      pending.index,
-      pending.index + MANUAL_ENRICH_CONCURRENCY
-    );
-    await Promise.all(
-      chunk.map(async (candidate) => {
-        try {
-          const detailed = await enrichWithFullDetail(
-            ticket,
-            candidate.codigo_externo,
-            candidate.tipo
-          );
-          if (!detailed) {
-            pending.errors.push(`${candidate.codigo_externo}: no encontrado en MP`);
-            return;
-          }
-          if (!passesPostEnrichFilter(detailed, notifyFilters)) return;
-          const result = await upsertProcess(supabase, detailed, orgRut, {
-            notifyFilters,
-            markDashboardSync: true,
-          });
-          if (result === "created") pending.created += 1;
-          else pending.updated += 1;
-        } catch (err) {
-          pending.errors.push(formatSyncProcessError(candidate.codigo_externo, err));
-        }
-      })
-    );
-    pending.index += chunk.length;
-    if (pending.index < pending.candidates.length) {
-      await delay(100);
-    }
-  }
-}
 
 /**
- * Sync manual en una sola ejecución servidor (objetivo < 2 min).
- * Archiva vencidos, busca novedades, enriquece en paralelo y cierra.
- * Para refrescar filas visibles usar «Actualizar estados (página)».
+ * Sync manual por lotes con presupuesto de tiempo (≈4 min máx. por click).
+ * Reutiliza cola mp_sync_pending: si Vercel corta, el siguiente click (o cron) retoma.
  */
 export async function runFastManualSync(
-  scope: Exclude<SyncScope, "all">
+  scope: Exclude<SyncScope, "all">,
+  options?: { continueBatch?: boolean }
 ): Promise<DashboardSyncBatchResult> {
-  const { supabase, orgRut, ticket } = await getOrgContext();
+  const { supabase, ticket } = await getOrgContext();
   if (!ticket) throw new Error("Configura el ticket de ChileCompra en Ajustes");
 
-  await closeStaleSyncRuns(supabase);
-  await saveMpSyncPending(supabase, scope, null);
+  const deadline = Date.now() + MANUAL_SYNC_REQUEST_MAX_MS;
+  let continueBatch = options?.continueBatch ?? false;
 
-  const notifyFilters = await loadOrgContentFilters();
-  const errors: string[] = [];
+  if (!continueBatch) {
+    const existing = await loadMpSyncPending(supabase, scope);
+    if (existing && !existing.finalized) {
+      continueBatch = true;
+    }
+  }
 
-  const { archived } = await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }));
+  let lastResult: DashboardSyncBatchResult | null = null;
 
-  const lastSyncAt = await getLastMpSyncAt(supabase, scope);
-  const candidates =
-    scope === "compra_agil"
-      ? await discoverFastCaCandidates(ticket, notifyFilters, lastSyncAt, (msg) =>
-          errors.push(msg)
-        )
-      : await discoverFastLicCandidates(ticket, notifyFilters, lastSyncAt, (msg) =>
-          errors.push(msg)
-        );
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    if (remaining < 10_000) break;
 
-  const pending: MpSyncPending = {
-    candidates,
-    index: 0,
-    mode: lastSyncAt ? "incremental" : "initial",
-    daysQueried: lastSyncAt ? 1 : Math.ceil(MP_INITIAL_SYNC_HOURS / 24),
-    fetched: candidates.length,
-    created: 0,
-    updated: 0,
-    errors,
-    ca_fetched: true,
-    cron_run: false,
-    light: Boolean(lastSyncAt),
-  };
+    const batchMs = Math.min(MANUAL_SYNC_LOOP_BATCH_MS, remaining - 8_000);
+    const result = await runDashboardSyncBatch({
+      continueBatch,
+      scope,
+      cron: false,
+      serverSide: true,
+      maxBatchMs: batchMs,
+    });
+    lastResult = result;
+    continueBatch = true;
 
-  const enrichDeadline = Date.now() + MANUAL_ENRICH_MAX_MS;
-  await enrichCandidatesParallel(ticket, supabase, orgRut, pending, notifyFilters, enrichDeadline);
+    if (result.done) {
+      return result;
+    }
+  }
 
-  pending.candidates = pending.candidates.slice(0, pending.index);
-  pending.index = pending.candidates.length;
-  pending.fetched = pending.candidates.length;
+  if (lastResult) {
+    return { ...lastResult, done: false, partial: true };
+  }
 
-  pending.ca_fetched = true;
-  return finalizeDashboardSync(supabase, pending, notifyFilters, scope, {
-    fast: true,
-    preArchived: archived,
-  });
+  throw new Error("No se pudo iniciar la sincronización");
 }
 
 /** Un lote de sincronización (≈30–50 s navegador / ≈260 s servidor). */
@@ -1269,7 +1107,9 @@ export async function runDashboardSyncBatch(
     return buildBatchResult(pending, false, "compra_agil");
   }
 
-  const batchBudgetMs = options.serverSide ? MANUAL_SYNC_BUDGET_MS : SYNC_BATCH_BUDGET_MS;
+  const batchBudgetMs =
+    options.maxBatchMs ??
+    (options.serverSide ? MANUAL_SYNC_BUDGET_MS : SYNC_BATCH_BUDGET_MS);
   const batchSize = options.serverSide ? MANUAL_CANDIDATE_CAP : SYNC_BATCH_SIZE;
 
   const batchStarted = Date.now();

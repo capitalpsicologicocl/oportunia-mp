@@ -6,8 +6,10 @@ import {
   DragOverlay,
   PointerSensor,
   closestCorners,
+  pointerWithin,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
@@ -56,6 +58,35 @@ function groupByColumn(cards: KanbanCardRow[]): Record<KanbanColumna, KanbanCard
 
 function flattenColumns(grouped: Record<KanbanColumna, KanbanCardRow[]>): KanbanCardRow[] {
   return KANBAN_COLUMNS.flatMap((col) => grouped[col]);
+}
+
+/** Columnas vacías no colisionan bien con closestCorners; pointerWithin las corrige. */
+const kanbanCollisionDetection: CollisionDetection = (args) => {
+  const pointerHits = pointerWithin(args);
+  if (pointerHits.length > 0) return pointerHits;
+  return closestCorners(args);
+};
+
+function resolveDropTarget(
+  overId: string,
+  overData: { type?: string; columnId?: KanbanColumna } | undefined,
+  grouped: Record<KanbanColumna, KanbanCardRow[]>
+): { destCol: KanbanColumna; destIndex: number } | null {
+  if (overData?.type === "column" && overData.columnId) {
+    const destCol = overData.columnId;
+    return { destCol, destIndex: grouped[destCol].length };
+  }
+
+  if (KANBAN_COLUMNS.includes(overId as KanbanColumna)) {
+    const destCol = overId as KanbanColumna;
+    return { destCol, destIndex: grouped[destCol].length };
+  }
+
+  const destCol = KANBAN_COLUMNS.find((col) => grouped[col].some((card) => card.id === overId));
+  if (!destCol) return null;
+
+  const destIndex = grouped[destCol].findIndex((card) => card.id === overId);
+  return { destCol, destIndex: destIndex < 0 ? grouped[destCol].length : destIndex };
 }
 
 interface KanbanBoardProps {
@@ -124,24 +155,21 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
 
     const activeId = String(active.id);
     const overId = String(over.id);
+    const previousGrouped = grouped;
 
     const sourceCol = KANBAN_COLUMNS.find((col) =>
       grouped[col].some((card) => card.id === activeId)
     );
     if (!sourceCol) return;
 
-    let destCol: KanbanColumna | undefined;
-    let destIndex = 0;
+    const drop = resolveDropTarget(
+      overId,
+      over.data.current as { type?: string; columnId?: KanbanColumna } | undefined,
+      grouped
+    );
+    if (!drop) return;
 
-    if (KANBAN_COLUMNS.includes(overId as KanbanColumna)) {
-      destCol = overId as KanbanColumna;
-      destIndex = grouped[destCol].length;
-    } else {
-      destCol = KANBAN_COLUMNS.find((col) => grouped[col].some((card) => card.id === overId));
-      if (!destCol) return;
-      destIndex = grouped[destCol].findIndex((card) => card.id === overId);
-      if (destIndex < 0) destIndex = grouped[destCol].length;
-    }
+    const { destCol, destIndex } = drop;
 
     const sourceItems = [...grouped[sourceCol]];
     const activeIndex = sourceItems.findIndex((card) => card.id === activeId);
@@ -164,13 +192,23 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
     setCards(flattenColumns(nextGrouped));
 
     try {
-      await fetch(`/api/kanban/${activeId}`, {
+      const res = await fetch(`/api/kanban/${activeId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ columna: destCol, orden: destIndex + 1 }),
       });
-    } catch {
-      setMessage("No se pudo guardar el movimiento. Recarga la página.");
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error ?? `Error HTTP ${res.status}`);
+      }
+    } catch (err) {
+      setGrouped(previousGrouped);
+      setCards(flattenColumns(previousGrouped));
+      setMessage(
+        err instanceof Error
+          ? `No se pudo mover la tarjeta: ${err.message}`
+          : "No se pudo guardar el movimiento. Recarga la página."
+      );
     }
   }
 
@@ -309,7 +347,7 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
 
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCorners}
+        collisionDetection={kanbanCollisionDetection}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >

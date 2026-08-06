@@ -6,6 +6,23 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { SyncScope } from "@/lib/ingest/sync-refresh";
 
+type SyncApiResponse = {
+  ok?: boolean;
+  error?: string;
+  done?: boolean;
+  partial?: boolean;
+  progress?: { total: number; processed: number };
+  phase?: string;
+  summary?: {
+    fetched: number;
+    created: number;
+    updated: number;
+    archived?: number;
+    errors: string[];
+    mode?: string;
+  };
+};
+
 export function SyncMercadoPublicoButton({
   scope,
   isFirstSync: isFirstSyncProp,
@@ -125,47 +142,76 @@ export function SyncMercadoPublicoButton({
     setResult(null);
     setProgress(
       isFirstSync
-        ? "Sincronización inicial en servidor (puede tardar 2–3 min)…"
-        : "Actualizando dashboard en servidor (1–3 min)…"
+        ? "Sincronización inicial en servidor (puede tardar varios minutos)…"
+        : "Actualizando dashboard en servidor (1–4 min, retoma sola si se corta)…"
     );
     startSessionKeepAlive();
 
     try {
-      const res = await fetch("/api/ingest/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scope }),
-      });
+      let continueBatch = false;
+      let rounds = 0;
+      const maxRounds = 15;
+      let lastData: SyncApiResponse | null = null;
 
-      const raw = await res.text();
-      let data: {
-        ok?: boolean;
-        error?: string;
-        done?: boolean;
-        summary?: {
-          fetched: number;
-          created: number;
-          updated: number;
-          archived?: number;
-          errors: string[];
-          mode?: string;
-        };
-      };
-      try {
-        data = JSON.parse(raw) as typeof data;
-      } catch {
-        throw new Error(
-          res.status === 504 || res.status === 502
-            ? "El servidor tardó demasiado (timeout). Intenta de nuevo; si persiste, revisa Ajustes → ticket MP."
-            : `Respuesta inválida del servidor (${res.status}): ${raw.slice(0, 100)}`
+      while (rounds < maxRounds) {
+        rounds += 1;
+        const res = await fetch("/api/ingest/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scope, continueBatch }),
+        });
+
+        const raw = await res.text();
+        let data: SyncApiResponse;
+        try {
+          data = JSON.parse(raw) as SyncApiResponse;
+        } catch {
+          if (continueBatch && lastData?.partial) {
+            setError(
+              "La sync quedó a medias por timeout del servidor. Pulsa Sincronizar otra vez para retomar donde quedó."
+            );
+            setProgress(null);
+            return;
+          }
+          throw new Error(
+            res.status === 504 || res.status === 502
+              ? "El servidor tardó demasiado (timeout). Pulsa Sincronizar de nuevo; retomará automáticamente."
+              : `Respuesta inválida del servidor (${res.status}): ${raw.slice(0, 100)}`
+          );
+        }
+
+        if (!res.ok || !data?.ok) {
+          throw new Error(data?.error ?? `Error HTTP ${res.status}`);
+        }
+
+        lastData = data;
+
+        const { total = 0, processed = 0 } = data.progress ?? {};
+        const phaseLabel =
+          data.phase === "compra_agil"
+            ? "buscando CA en MP"
+            : data.phase === "enrich"
+              ? "importando detalle"
+              : data.phase === "discover"
+                ? "descubriendo"
+                : "procesando";
+
+        setProgress(
+          total > 0
+            ? `${phaseLabel}: ${processed}/${total} (paso ${rounds})…`
+            : `${phaseLabel} (paso ${rounds})…`
         );
+
+        if (data.done) break;
+        continueBatch = true;
       }
 
-      if (!res.ok || !data.ok) {
-        throw new Error(data.error ?? `Error HTTP ${res.status}`);
+      const data = lastData;
+      if (!data?.summary) {
+        throw new Error("La sync no devolvió resultados");
       }
 
-      const s = data.summary!;
+      const s = data.summary;
       const avisos = (s.errors ?? []).filter(Boolean);
       const modeLabel =
         s.mode === "initial"
@@ -174,12 +220,19 @@ export function SyncMercadoPublicoButton({
             ? "actualización rápida"
             : "actualización incremental";
 
+      if (!data.done) {
+        setError(
+          "Sync parcial por tiempo. Pulsa Sincronizar otra vez para continuar (retoma automáticamente)."
+        );
+      }
+
       setResult(
         `${modeLabel}: ${s.fetched} revisados · ${s.created} nuevos · ${s.updated} actualizados` +
           (s.archived && s.archived > 0 ? ` · ${s.archived} archivados` : "") +
+          (data.partial && !data.done ? " · incompleta" : "") +
           (avisos.length ? ` · ${avisos.length} avisos` : "")
       );
-      if (avisos.length) {
+      if (avisos.length && data.done) {
         setError(avisos.slice(0, 2).join(" · "));
       }
       setProgress(null);

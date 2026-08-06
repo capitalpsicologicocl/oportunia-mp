@@ -79,4 +79,6 @@ export interface DashboardSyncBatchResult {
   summary: IngestSummary;
   progress: { total: number; processed: number };
   phase?: "discover" | "compra_agil" | "enrich" | "finalize";
+  /** Sync interrumpida por límite de tiempo; reanudar con continueBatch. */
+  partial?: boolean;
 }

@@ -19,10 +19,13 @@ export async function POST(request: NextRequest) {
 
   const body = (await request.json().catch(() => ({}))) as {
     scope?: string;
+    continueBatch?: boolean;
   };
 
   try {
-    const batch = await runFastManualSync(parseScope(body.scope));
+    const batch = await runFastManualSync(parseScope(body.scope), {
+      continueBatch: body.continueBatch === true,
+    });
     return NextResponse.json({ ok: true, ...batch });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Error desconocido";

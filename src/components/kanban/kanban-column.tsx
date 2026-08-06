@@ -29,11 +29,13 @@ export function KanbanColumn({
   archivingCardId,
   removingCardId,
 }: KanbanColumnProps) {
-  const { setNodeRef, isOver } = useDroppable({ id: columnId });
+  const { setNodeRef, isOver } = useDroppable({
+    id: columnId,
+    data: { type: "column", columnId },
+  });
 
   return (
     <div
-      ref={setNodeRef}
       className={`flex w-72 shrink-0 flex-col rounded-xl border border-t-4 bg-muted/30 ${colorClass} ${
         isOver ? "ring-2 ring-primary/40" : ""
       }`}
@@ -45,7 +47,12 @@ export function KanbanColumn({
         </span>
       </div>
       <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
-        <div className="flex min-h-[120px] flex-1 flex-col gap-2 px-2 pb-3">
+        <div
+          ref={setNodeRef}
+          className={`flex min-h-[160px] flex-1 flex-col gap-2 px-2 pb-3 ${
+            isOver ? "bg-primary/5" : ""
+          }`}
+        >
           {cards.length === 0 ? (
             <p className="px-1 py-4 text-center text-xs text-muted-foreground">Sin tarjetas</p>
           ) : (
