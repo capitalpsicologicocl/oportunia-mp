@@ -143,14 +143,16 @@ export function SyncMercadoPublicoButton({
     setProgress(
       isFirstSync
         ? "Sincronización inicial en servidor (puede tardar varios minutos)…"
-        : "Actualizando dashboard en servidor (1–4 min, retoma sola si se corta)…"
+        : "Actualizando dashboard en servidor (varias rondas cortas, ~3–5 min)…"
     );
     startSessionKeepAlive();
 
     try {
       let continueBatch = false;
       let rounds = 0;
-      const maxRounds = 15;
+      const maxRounds = 40;
+      let timeoutRetries = 0;
+      const maxTimeoutRetries = 4;
       let lastData: SyncApiResponse | null = null;
 
       while (rounds < maxRounds) {
@@ -165,17 +167,22 @@ export function SyncMercadoPublicoButton({
         let data: SyncApiResponse;
         try {
           data = JSON.parse(raw) as SyncApiResponse;
+          timeoutRetries = 0;
         } catch {
-          if (continueBatch && lastData?.partial) {
-            setError(
-              "La sync quedó a medias por timeout del servidor. Pulsa Sincronizar otra vez para retomar donde quedó."
+          const isGatewayTimeout = res.status === 504 || res.status === 502;
+          if (isGatewayTimeout && timeoutRetries < maxTimeoutRetries) {
+            timeoutRetries += 1;
+            setProgress(
+              `Timeout del servidor, reintentando (${timeoutRetries}/${maxTimeoutRetries})…`
             );
-            setProgress(null);
-            return;
+            await new Promise((resolve) => setTimeout(resolve, 2500));
+            rounds -= 1;
+            continueBatch = true;
+            continue;
           }
           throw new Error(
-            res.status === 504 || res.status === 502
-              ? "El servidor tardó demasiado (timeout). Pulsa Sincronizar de nuevo; retomará automáticamente."
+            isGatewayTimeout
+              ? "El servidor tardó demasiado. Pulsa Sincronizar de nuevo; retomará donde quedó."
               : `Respuesta inválida del servidor (${res.status}): ${raw.slice(0, 100)}`
           );
         }

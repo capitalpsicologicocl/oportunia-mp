@@ -799,7 +799,8 @@ async function appendCompraAgilCandidates(
   pending: MpSyncPending,
   notifyFilters: Awaited<ReturnType<typeof loadOrgContentFilters>>,
   onError: (msg: string) => void,
-  lastSyncAt: string | null
+  lastSyncAt: string | null,
+  options?: { perRequest?: boolean }
 ) {
   const beforeLen = pending.candidates.length;
   const seen = new Set(pending.candidates.map((c) => c.codigo_externo));
@@ -818,7 +819,11 @@ async function appendCompraAgilCandidates(
 
   const terms = pending.ca_search_terms;
   const offset = pending.ca_term_offset ?? 0;
-  const keywordBatchSize = pending.cron_run ? CRON_CA_KEYWORDS_PER_BATCH : MP_CA_KEYWORDS_PER_BATCH;
+  const keywordBatchSize = options?.perRequest
+    ? 4
+    : pending.cron_run
+      ? CRON_CA_KEYWORDS_PER_BATCH
+      : MP_CA_KEYWORDS_PER_BATCH;
 
   if (pending.cron_run && discoverMode === "nightly") {
     pending.ca_keywords_skipped = false;
@@ -857,20 +862,25 @@ async function appendCompraAgilCandidates(
     pending.ca_term_offset = terms.length;
   }
 
+  const ranKeywordBatch = !pending.ca_keywords_skipped && offset < terms.length;
+
   if ((pending.ca_term_offset ?? 0) >= terms.length && !pending.ca_recent_scanned) {
-    try {
-      const maxPages = pending.cron_run ? 4 : 3;
-      const rawItems = await fetchCompraAgilPublishedSince(ticket, publicadoDesde, maxPages);
-      for (const raw of rawItems) {
-        if (countCandidatesByTipo(pending, "compra_agil") >= MP_CA_CANDIDATE_MAX) break;
-        const normalized = normalizeCompraAgil(raw);
-        if (!passesCaDiscoverFilter(normalized, notifyFilters)) continue;
-        appendCaCandidate(pending, normalized, seen);
+    const deferListing = options?.perRequest && ranKeywordBatch;
+    if (!deferListing) {
+      try {
+        const maxPages = pending.cron_run ? 4 : options?.perRequest ? 2 : 3;
+        const rawItems = await fetchCompraAgilPublishedSince(ticket, publicadoDesde, maxPages);
+        for (const raw of rawItems) {
+          if (countCandidatesByTipo(pending, "compra_agil") >= MP_CA_CANDIDATE_MAX) break;
+          const normalized = normalizeCompraAgil(raw);
+          if (!passesCaDiscoverFilter(normalized, notifyFilters)) continue;
+          appendCaCandidate(pending, normalized, seen);
+        }
+      } catch (err) {
+        onError(`Compra ágil (listado reciente): ${err instanceof Error ? err.message : "Error"}`);
       }
-    } catch (err) {
-      onError(`Compra ágil (listado reciente): ${err instanceof Error ? err.message : "Error"}`);
+      pending.ca_recent_scanned = true;
     }
-    pending.ca_recent_scanned = true;
   }
 
   if ((pending.ca_term_offset ?? 0) >= terms.length && pending.ca_recent_scanned) {
@@ -990,16 +1000,14 @@ export interface DashboardSyncBatchOptions {
   maxBatchMs?: number;
 }
 
-/** Presupuesto total por click de sync manual (una request HTTP). */
-const MANUAL_SYNC_REQUEST_MAX_MS = 268_000;
-/** Ms máximos por lote dentro del bucle manual (varias vueltas por request). */
-const MANUAL_SYNC_LOOP_BATCH_MS = 48_000;
+/** Máx. ms por request HTTP de sync manual (Vercel corta ~300 s; el cliente encadena rondas). */
+const MANUAL_SYNC_PER_REQUEST_MS = 52_000;
 const MANUAL_SYNC_BUDGET_MS = 240_000;
 const MANUAL_CANDIDATE_CAP = 50;
 
 /**
- * Sync manual por lotes con presupuesto de tiempo (≈4 min máx. por click).
- * Reutiliza cola mp_sync_pending: si Vercel corta, el siguiente click (o cron) retoma.
+ * Una ronda de sync manual (~50 s). El botón encadena varias rondas hasta terminar o pausar.
+ * Reutiliza cola mp_sync_pending: si se corta, la siguiente ronda retoma.
  */
 export async function runFastManualSync(
   scope: Exclude<SyncScope, "all">,
@@ -1008,7 +1016,6 @@ export async function runFastManualSync(
   const { supabase, ticket } = await getOrgContext();
   if (!ticket) throw new Error("Configura el ticket de ChileCompra en Ajustes");
 
-  const deadline = Date.now() + MANUAL_SYNC_REQUEST_MAX_MS;
   let continueBatch = options?.continueBatch ?? false;
 
   if (!continueBatch) {
@@ -1018,33 +1025,16 @@ export async function runFastManualSync(
     }
   }
 
-  let lastResult: DashboardSyncBatchResult | null = null;
+  const result = await runDashboardSyncBatch({
+    continueBatch,
+    scope,
+    cron: false,
+    serverSide: true,
+    maxBatchMs: MANUAL_SYNC_PER_REQUEST_MS,
+  });
 
-  while (Date.now() < deadline) {
-    const remaining = deadline - Date.now();
-    if (remaining < 10_000) break;
-
-    const batchMs = Math.min(MANUAL_SYNC_LOOP_BATCH_MS, remaining - 8_000);
-    const result = await runDashboardSyncBatch({
-      continueBatch,
-      scope,
-      cron: false,
-      serverSide: true,
-      maxBatchMs: batchMs,
-    });
-    lastResult = result;
-    continueBatch = true;
-
-    if (result.done) {
-      return result;
-    }
-  }
-
-  if (lastResult) {
-    return { ...lastResult, done: false, partial: true };
-  }
-
-  throw new Error("No se pudo iniciar la sincronización");
+  if (result.done) return result;
+  return { ...result, done: false, partial: true };
 }
 
 /** Un lote de sincronización (≈30–50 s navegador / ≈260 s servidor). */
@@ -1099,9 +1089,13 @@ export async function runDashboardSyncBatch(
 
   if (scope === "compra_agil" && !pending.ca_fetched) {
     const lastSyncAt = await getLastMpSyncAt(supabase, "compra_agil");
-    await appendCompraAgilCandidates(ticket, pending, notifyFilters, (msg) =>
-      pending!.errors.push(msg),
-      lastSyncAt
+    await appendCompraAgilCandidates(
+      ticket,
+      pending,
+      notifyFilters,
+      (msg) => pending!.errors.push(msg),
+      lastSyncAt,
+      { perRequest: Boolean(options.maxBatchMs && options.maxBatchMs <= 60_000) }
     );
     await saveMpSyncPending(supabase, scope, pending);
     return buildBatchResult(pending, false, "compra_agil");
