@@ -8,7 +8,7 @@ import {
 import { isExcluded } from "@/lib/dashboard/content-match";
 import { extractRubroSearchTerms } from "@/lib/onboarding/rubros-unspsc";
 import { looksLikeProcessCodigo } from "@/lib/dashboard/process-codigo";
-import { processNeedsApiRefresh, type SyncScope } from "@/lib/ingest/sync-refresh";
+import { isTerminalMpEstado, processNeedsApiRefresh, type SyncScope } from "@/lib/ingest/sync-refresh";
 import { DEFAULT_ORG_ID, type DashboardSyncBatchResult, type IngestSummary, type ProcessInsert, type ProcessTipo } from "@/types/database";
 import { parseMontoFromApi } from "@/lib/montos";
 import { createNotificationIfAbsent } from "@/lib/notifications/create";
@@ -1692,6 +1692,104 @@ export async function refreshStaleProcesses(
 function estadoLooksStale(estado: string | null | undefined): boolean {
   if (!estado) return true;
   return /publicad/i.test(estado);
+}
+
+const KANBAN_REFRESH_MAX_AGE_MS = 4 * 60 * 60 * 1000;
+
+function kanbanPipelineNeedsRefresh(row: {
+  estado: string | null;
+  fecha_cierre: string | null;
+  hora_cierre: string | null;
+  adjudicado_a_mi: boolean;
+  last_synced_at: string | null;
+}): boolean {
+  if (
+    isPastCierre(row.fecha_cierre, row.hora_cierre) &&
+    !row.adjudicado_a_mi &&
+    !isTerminalMpEstado(row.estado)
+  ) {
+    return true;
+  }
+  if (!row.last_synced_at) return true;
+  return Date.now() - new Date(row.last_synced_at).getTime() > KANBAN_REFRESH_MAX_AGE_MS;
+}
+
+/** Actualiza estados MP de procesos en el Kanban (prioriza cierre vencido). */
+export async function refreshKanbanPipelineProcesses(limit = 25): Promise<{
+  refreshed: number;
+  notFound: number;
+  errors: string[];
+}> {
+  const { supabase, orgRut, ticket } = await getOrgContext();
+  if (!ticket) {
+    return { refreshed: 0, notFound: 0, errors: [] };
+  }
+
+  const { data: cardRows, error } = await supabase
+    .from("kanban_cards")
+    .select(
+      `
+      process_id,
+      processes (
+        codigo_externo,
+        tipo,
+        estado,
+        fecha_cierre,
+        hora_cierre,
+        adjudicado_a_mi,
+        last_synced_at
+      )
+    `
+    )
+    .eq("organization_id", DEFAULT_ORG_ID)
+    .eq("en_pipeline", true)
+    .eq("descartado", false);
+
+  if (error) throw new Error(error.message);
+
+  type PipelineRow = {
+    codigo_externo: string;
+    tipo: ProcessTipo;
+    estado: string | null;
+    fecha_cierre: string | null;
+    hora_cierre: string | null;
+    adjudicado_a_mi: boolean;
+    last_synced_at: string | null;
+  };
+
+  const candidates = (cardRows ?? [])
+    .map((row) => {
+      const process = row.processes as PipelineRow | PipelineRow[] | null;
+      const p = Array.isArray(process) ? process[0] : process;
+      if (!p?.codigo_externo) return null;
+      return p;
+    })
+    .filter((p): p is PipelineRow => p !== null && kanbanPipelineNeedsRefresh(p))
+    .sort((a, b) => {
+      const aPast = isPastCierre(a.fecha_cierre, a.hora_cierre) ? 0 : 1;
+      const bPast = isPastCierre(b.fecha_cierre, b.hora_cierre) ? 0 : 1;
+      if (aPast !== bPast) return aPast - bPast;
+      const aSync = a.last_synced_at ? new Date(a.last_synced_at).getTime() : 0;
+      const bSync = b.last_synced_at ? new Date(b.last_synced_at).getTime() : 0;
+      return aSync - bSync;
+    })
+    .slice(0, limit)
+    .map((p) => ({ codigo_externo: p.codigo_externo, tipo: p.tipo }));
+
+  if (candidates.length === 0) {
+    return { refreshed: 0, notFound: 0, errors: [] };
+  }
+
+  const notifyFilters = await loadOrgContentFilters();
+  const { updated, notFound, errors } = await refreshProcessRowsInParallel(candidates, {
+    ticket,
+    supabase,
+    orgRut,
+    notifyFilters,
+    upsertOptions: { markDashboardSync: true },
+  });
+
+  return { refreshed: updated, notFound, errors };
 }
 
 export async function maybeRefreshSearchProcess(q?: string): Promise<void> {

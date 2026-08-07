@@ -104,6 +104,7 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
   const [q, setQ] = useState(initialQ);
   const [addCodigo, setAddCodigo] = useState("");
   const [loading, setLoading] = useState(false);
+  const [refreshingStatuses, setRefreshingStatuses] = useState(false);
   const [archivingCardId, setArchivingCardId] = useState<string | null>(null);
   const [removingCardId, setRemovingCardId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -123,6 +124,32 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
     >;
     return { total: cards.length, byColumn };
   }, [cards.length, grouped]);
+
+  async function handleRefreshStatuses() {
+    setRefreshingStatuses(true);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/kanban/refresh-statuses", { method: "POST" });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        refreshed?: number;
+        notFound?: number;
+      };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "No se pudo actualizar");
+
+      await reloadBoard();
+      setMessage(
+        data.refreshed && data.refreshed > 0
+          ? `${data.refreshed} tarjeta${data.refreshed !== 1 ? "s" : ""} actualizada${data.refreshed !== 1 ? "s" : ""} desde MP.`
+          : "Estados al día (sin cambios en MP)."
+      );
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Error al actualizar estados");
+    } finally {
+      setRefreshingStatuses(false);
+    }
+  }
 
   async function reloadBoard(nextQ = q) {
     setLoading(true);
@@ -315,8 +342,16 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
             placeholder="Código, nombre, responsable…"
           />
         </div>
-        <Button type="button" disabled={loading} onClick={() => reloadBoard()}>
+        <Button type="button" disabled={loading || refreshingStatuses} onClick={() => reloadBoard()}>
           {loading ? "Cargando…" : "Buscar"}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={loading || refreshingStatuses}
+          onClick={handleRefreshStatuses}
+        >
+          {refreshingStatuses ? "Actualizando estados…" : "Actualizar estados MP"}
         </Button>
         <div className="flex min-w-[240px] flex-1 items-end gap-2">
           <div className="flex-1 space-y-1">

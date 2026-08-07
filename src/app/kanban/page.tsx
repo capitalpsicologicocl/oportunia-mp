@@ -3,6 +3,7 @@ import { AppHeader } from "@/components/layout/app-header";
 import { KanbanBoard } from "@/components/kanban/kanban-board";
 import { getKanbanBoard } from "@/lib/kanban/queries";
 import { getOnboardingStatus } from "@/lib/onboarding/status";
+import { refreshKanbanPipelineProcesses } from "@/lib/ingest/service";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,7 @@ export default async function KanbanPage({ searchParams }: KanbanPageProps) {
 
   const q = param(params.q);
   const initialCardId = param(params.card);
+  await refreshKanbanPipelineProcesses(20).catch(() => undefined);
   const board = await getKanbanBoard({ q });
 
   return (

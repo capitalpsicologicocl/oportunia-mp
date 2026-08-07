@@ -32,8 +32,7 @@ export function effectiveMpEstadoDisplay(
   adjudicadoRut?: string | null
 ): ReturnType<typeof mpEstadoDisplayLabel> {
   const base = mpEstadoDisplayLabel(estado, adjudicadoAMi, adjudicadoRut);
-  if (base.tone !== "open") return base;
-  if (isPastCierre(fecha_cierre, hora_cierre) && /publicad/i.test(estado ?? "")) {
+  if (base.tone === "open" && isPastCierre(fecha_cierre, hora_cierre)) {
     return { label: "Cierre vencido", tone: "closed" };
   }
   return base;

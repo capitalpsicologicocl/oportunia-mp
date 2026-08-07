@@ -166,6 +166,8 @@ export function KanbanCardPreview({
                 estado={p.estado}
                 adjudicadoAMi={p.adjudicado_a_mi}
                 adjudicadoRut={p.adjudicado_rut}
+                fechaCierre={p.fecha_cierre}
+                horaCierre={p.hora_cierre}
               />
               {card.estado_interno && (
                 <span className="rounded-full border border-[#d4a017]/50 px-1.5 py-0.5 text-[10px] text-muted-foreground">
