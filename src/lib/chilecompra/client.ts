@@ -614,6 +614,10 @@ export function normalizeCompraAgil(raw: unknown): NormalizedProcess {
   const descripcion = pickString(item.descripcion, item.Descripcion);
   const estado = extractEstado(item);
   const proveedor = extractProveedorSeleccionado(item);
+  const estadoNormalizado =
+    proveedor.rut && /publicad|evaluaci|abiert|activ/i.test(estado ?? "")
+      ? "Proveedor seleccionado"
+      : estado;
 
   const publicacionRaw =
     item.fecha_publicacion ??
@@ -648,7 +652,7 @@ export function normalizeCompraAgil(raw: unknown): NormalizedProcess {
   return {
     codigo_externo: codigo,
     tipo: "compra_agil",
-    estado,
+    estado: estadoNormalizado,
     nombre,
     descripcion,
     tipo_detalle: "Compra Ágil",
@@ -723,7 +727,7 @@ export function normalizeCompraAgil(raw: unknown): NormalizedProcess {
     content_hash: computeContentHash([
       nombre,
       descripcion,
-      estado,
+      estadoNormalizado,
       monto.raw,
       proveedor.rut,
       proveedor.nombre,

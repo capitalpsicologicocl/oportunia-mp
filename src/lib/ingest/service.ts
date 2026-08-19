@@ -477,6 +477,12 @@ function resolveCaPublicadoDesdeIso(
   return chileDateIso(new Date(new Date(lastSyncAt).getTime() - overlapMs));
 }
 
+/** Ventana amplia (72 h) para búsqueda por keywords: evita perder CA abiertas publicadas antes del último sync. */
+function caKeywordSearchPublicadoDesdeIso(): string {
+  const windowMs = MP_INITIAL_SYNC_HOURS * 60 * 60 * 1000;
+  return chileDateIso(new Date(Date.now() - windowMs));
+}
+
 function compraAgilPublicadoDesdeIso(lastSyncAt: string | null, mode: CaDiscoverMode): string {
   return resolveCaPublicadoDesdeIso(lastSyncAt, mode);
 }
@@ -514,7 +520,8 @@ async function fetchAllCompraAgilForBackfill(
 ): Promise<NormalizedProcess[]> {
   const seen = new Set<string>();
   const merged: NormalizedProcess[] = [];
-  const publicadoDesde = compraAgilPublicadoDesdeIso(lastSyncAt, discoverMode);
+  const listingPublicadoDesde = compraAgilPublicadoDesdeIso(lastSyncAt, discoverMode);
+  const keywordPublicadoDesde = caKeywordSearchPublicadoDesdeIso();
   const filters = await loadOrgContentFilters();
 
   const addIfRelevant = (normalized: NormalizedProcess) => {
@@ -534,7 +541,7 @@ async function fetchAllCompraAgilForBackfill(
         {
           startIndex: offset,
           batchSize: MP_CA_KEYWORDS_PER_BATCH,
-          publicadoDesde,
+          publicadoDesde: keywordPublicadoDesde,
         }
       );
       for (const normalized of batch) addIfRelevant(normalized);
@@ -546,7 +553,7 @@ async function fetchAllCompraAgilForBackfill(
   try {
     const rawItems = await fetchCompraAgilPublishedSince(
       ticket,
-      publicadoDesde,
+      listingPublicadoDesde,
       discoverMode === "nightly" ? 6 : 3
     );
     for (const raw of rawItems) {
@@ -808,6 +815,7 @@ async function appendCompraAgilCandidates(
   const publicadoDesde =
     pending.ca_publicado_desde ?? compraAgilPublicadoDesdeIso(lastSyncAt, discoverMode);
   pending.ca_publicado_desde = publicadoDesde;
+  const keywordPublicadoDesde = caKeywordSearchPublicadoDesdeIso();
 
   if (!pending.ca_search_terms?.length) {
     pending.ca_search_terms = buildCompraAgilSearchTerms(
@@ -838,7 +846,7 @@ async function appendCompraAgilCandidates(
         {
           startIndex: offset,
           batchSize: keywordBatchSize,
-          publicadoDesde,
+          publicadoDesde: keywordPublicadoDesde,
         }
       );
       for (const normalized of batch) {
@@ -1694,22 +1702,30 @@ function estadoLooksStale(estado: string | null | undefined): boolean {
   return /publicad/i.test(estado);
 }
 
-const KANBAN_REFRESH_MAX_AGE_MS = 4 * 60 * 60 * 1000;
+const KANBAN_REFRESH_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
 function kanbanPipelineNeedsRefresh(row: {
   estado: string | null;
   fecha_cierre: string | null;
   hora_cierre: string | null;
   adjudicado_a_mi: boolean;
+  adjudicado_rut: string | null;
   last_synced_at: string | null;
 }): boolean {
-  if (
-    isPastCierre(row.fecha_cierre, row.hora_cierre) &&
-    !row.adjudicado_a_mi &&
-    !isTerminalMpEstado(row.estado)
-  ) {
+  const pastCierre = isPastCierre(row.fecha_cierre, row.hora_cierre);
+
+  if (pastCierre && !row.adjudicado_a_mi && !isTerminalMpEstado(row.estado)) {
     return true;
   }
+
+  if (pastCierre && !row.adjudicado_rut && estadoLooksStale(row.estado)) {
+    return true;
+  }
+
+  if (row.adjudicado_rut && estadoLooksStale(row.estado)) {
+    return true;
+  }
+
   if (!row.last_synced_at) return true;
   return Date.now() - new Date(row.last_synced_at).getTime() > KANBAN_REFRESH_MAX_AGE_MS;
 }
@@ -1737,6 +1753,7 @@ export async function refreshKanbanPipelineProcesses(limit = 25): Promise<{
         fecha_cierre,
         hora_cierre,
         adjudicado_a_mi,
+        adjudicado_rut,
         last_synced_at
       )
     `
@@ -1754,6 +1771,7 @@ export async function refreshKanbanPipelineProcesses(limit = 25): Promise<{
     fecha_cierre: string | null;
     hora_cierre: string | null;
     adjudicado_a_mi: boolean;
+    adjudicado_rut: string | null;
     last_synced_at: string | null;
   };
 

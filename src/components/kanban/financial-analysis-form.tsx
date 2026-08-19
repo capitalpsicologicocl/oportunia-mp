@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,6 +20,7 @@ import {
   emptyDetalleTrasladoLargo,
   emptyDetalleViatico,
   emptyItemTabla,
+  calcItemSubtotal,
   ingresoNeto,
   recalcularAnalisis,
   totalCostos,
@@ -134,6 +135,11 @@ export function FinancialAnalysisForm({
     onChange(recalcularAnalisis({ ...value, ...partial }, montoOfertado));
   }
 
+  const computed = useMemo(
+    () => recalcularAnalisis(value, montoOfertado),
+    [value, montoOfertado]
+  );
+
   return (
     <div className="space-y-3">
       <Section title="Horas relatoría">
@@ -141,14 +147,14 @@ export function FinancialAnalysisForm({
         <NumInput label="N° horas curso" value={value.relatores.horasCurso} onChange={(v) => patch({ relatores: { ...value.relatores, horasCurso: v } })} />
         <NumInput label="N° horas preparación" value={value.relatores.horasPreparacion} onChange={(v) => patch({ relatores: { ...value.relatores, horasPreparacion: v } })} />
         <NumInput label="N° relatores" value={value.relatores.numRelatores} onChange={(v) => patch({ relatores: { ...value.relatores, numRelatores: v } })} />
-        <p className="sm:col-span-2 text-sm font-medium">Subtotal: {formatMontoCLP(value.relatores.subtotal)}</p>
+        <p className="sm:col-span-2 text-sm font-medium">Subtotal: {formatMontoCLP(computed.relatores.subtotal)}</p>
       </Section>
 
       <Section title="Arriendo lugar">
         <NumInput label="Precio diario sin IVA" value={value.arriendo.precioDiarioSinIva} onChange={(v) => patch({ arriendo: { ...value.arriendo, precioDiarioSinIva: v } })} />
         <NumInput label="IVA %" value={value.arriendo.ivaPct} onChange={(v) => patch({ arriendo: { ...value.arriendo, ivaPct: v ?? IVA_DEFAULT } })} />
         <NumInput label="N° días" value={value.arriendo.numDias} onChange={(v) => patch({ arriendo: { ...value.arriendo, numDias: v } })} />
-        <p className="text-sm font-medium">Total: {formatMontoCLP(value.arriendo.total)}</p>
+        <p className="text-sm font-medium">Total: {formatMontoCLP(computed.arriendo.total)}</p>
       </Section>
 
       <Section title="Coffee" onDetail={() => setSheet("coffee")}>
@@ -167,53 +173,53 @@ export function FinancialAnalysisForm({
           value={value.coffee.cantidad}
           onChange={(v) => patch({ coffee: { ...value.coffee, cantidad: v } })}
         />
-        <p className="text-sm font-medium">Subtotal: {formatMontoCLP(value.coffee.subtotal)}</p>
+        <p className="text-sm font-medium">Subtotal: {formatMontoCLP(computed.coffee.subtotal)}</p>
       </Section>
 
       <Section title="Almuerzo" onDetail={() => setSheet("almuerzo")}>
         <NumInput label="Valor unit. sin IVA" value={value.almuerzo.valorUnitarioSinIva} onChange={(v) => patch({ almuerzo: { ...value.almuerzo, valorUnitarioSinIva: v } })} />
         <NumInput label="IVA %" value={value.almuerzo.ivaPct} onChange={(v) => patch({ almuerzo: { ...value.almuerzo, ivaPct: v ?? IVA_DEFAULT } })} />
         <NumInput label="Cantidad" value={value.almuerzo.cantidad} onChange={(v) => patch({ almuerzo: { ...value.almuerzo, cantidad: v } })} />
-        <p className="text-sm font-medium">Subtotal: {formatMontoCLP(value.almuerzo.subtotal)}</p>
+        <p className="text-sm font-medium">Subtotal: {formatMontoCLP(computed.almuerzo.subtotal)}</p>
       </Section>
 
       <Section title="Traslado Ida" onDetail={() => setSheet("ida")}>
         <NumInput label="N° personas" value={value.trasladoIda.numPersonas} onChange={(v) => patch({ trasladoIda: { ...value.trasladoIda, numPersonas: v } })} />
-        <p className="text-sm font-medium">Subtotal: {formatMontoCLP(value.trasladoIda.subtotal)}</p>
+        <p className="text-sm font-medium">Subtotal: {formatMontoCLP(computed.trasladoIda.subtotal)}</p>
       </Section>
 
       <Section title="Traslado Regreso" onDetail={() => setSheet("regreso")}>
         <NumInput label="N° personas" value={value.trasladoRegreso.numPersonas} onChange={(v) => patch({ trasladoRegreso: { ...value.trasladoRegreso, numPersonas: v } })} />
-        <p className="text-sm font-medium">Subtotal: {formatMontoCLP(value.trasladoRegreso.subtotal)}</p>
+        <p className="text-sm font-medium">Subtotal: {formatMontoCLP(computed.trasladoRegreso.subtotal)}</p>
       </Section>
 
       <Section title="Traslados locales diarios" onDetail={() => setSheet("locales")}>
         <NumInput label="N° días" value={value.trasladosLocales.numDias} onChange={(v) => patch({ trasladosLocales: { ...value.trasladosLocales, numDias: v } })} />
         <NumInput label="N° relatores" value={value.trasladosLocales.numRelatores} onChange={(v) => patch({ trasladosLocales: { ...value.trasladosLocales, numRelatores: v } })} />
-        <p className="sm:col-span-2 text-sm font-medium">Subtotal: {formatMontoCLP(value.trasladosLocales.subtotal)}</p>
+        <p className="sm:col-span-2 text-sm font-medium">Subtotal: {formatMontoCLP(computed.trasladosLocales.subtotal)}</p>
       </Section>
 
       <Section title="Alojamiento diario" onDetail={() => setSheet("alojamiento")}>
         <NumInput label="N° días" value={value.alojamiento.numDias} onChange={(v) => patch({ alojamiento: { ...value.alojamiento, numDias: v } })} />
         <NumInput label="N° relatores" value={value.alojamiento.numRelatores} onChange={(v) => patch({ alojamiento: { ...value.alojamiento, numRelatores: v } })} />
-        <p className="sm:col-span-2 text-sm font-medium">Subtotal: {formatMontoCLP(value.alojamiento.subtotal)}</p>
+        <p className="sm:col-span-2 text-sm font-medium">Subtotal: {formatMontoCLP(computed.alojamiento.subtotal)}</p>
       </Section>
 
       <Section title="Viáticos diarios" onDetail={() => setSheet("viaticos")}>
         <NumInput label="N° días" value={value.viaticos.numDias} onChange={(v) => patch({ viaticos: { ...value.viaticos, numDias: v } })} />
         <NumInput label="N° relatores" value={value.viaticos.numRelatores} onChange={(v) => patch({ viaticos: { ...value.viaticos, numRelatores: v } })} />
-        <p className="sm:col-span-2 text-sm font-medium">Subtotal: {formatMontoCLP(value.viaticos.subtotal)}</p>
+        <p className="sm:col-span-2 text-sm font-medium">Subtotal: {formatMontoCLP(computed.viaticos.subtotal)}</p>
       </Section>
 
       <Section title="Materiales" onDetail={() => setSheet("materiales")}>
         <p className="sm:col-span-2 text-sm text-muted-foreground">
-          Total: {formatMontoCLP(value.materiales.reduce((s, i) => s + (i.subtotal ?? 0), 0))}
+          Total: {formatMontoCLP(computed.materiales.reduce((s, i) => s + (i.subtotal ?? 0), 0))}
         </p>
       </Section>
 
       <Section title="Otros" onDetail={() => setSheet("otros")}>
         <p className="sm:col-span-2 text-sm text-muted-foreground">
-          Total: {formatMontoCLP(value.otros.reduce((s, i) => s + (i.subtotal ?? 0), 0))}
+          Total: {formatMontoCLP(computed.otros.reduce((s, i) => s + (i.subtotal ?? 0), 0))}
         </p>
       </Section>
 
@@ -232,8 +238,8 @@ export function FinancialAnalysisForm({
       </Section>
 
       <div className="rounded-lg border-2 border-[#d4a017]/40 bg-[#fef9ec] p-3 text-sm">
-        <p><strong>Total costos:</strong> {formatMontoCLP(totalCostos(value))}</p>
-        <p><strong>Ingreso estimado:</strong> {formatMontoCLP(ingresoNeto(montoOfertado, value))}</p>
+        <p><strong>Total costos:</strong> {formatMontoCLP(totalCostos(computed))}</p>
+        <p><strong>Ingreso estimado:</strong> {formatMontoCLP(ingresoNeto(montoOfertado, computed))}</p>
       </div>
 
       <div className="space-y-1">
@@ -621,7 +627,7 @@ export function FinancialAnalysisForm({
                 patch({ [key]: rows });
               }} />
               <p className="flex items-end pb-2 text-xs font-medium">
-                {formatMontoCLP(item.subtotal)}
+                {formatMontoCLP(calcItemSubtotal(item))}
               </p>
             </div>
           ))}

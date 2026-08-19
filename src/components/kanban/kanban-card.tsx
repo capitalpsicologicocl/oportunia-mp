@@ -7,7 +7,7 @@ import { Archive, GripVertical, X } from "lucide-react";
 import { MpEstadoBadge } from "@/lib/dashboard/mp-estado-badge";
 import { formatFechaCL, formatHora, tipoLabel } from "@/lib/dashboard/format";
 import { formatMontoCLP } from "@/lib/montos";
-import { ingresoNeto, totalCostos } from "@/lib/kanban/financial-analysis";
+import { ingresoNeto, recalcularAnalisis, totalCostos } from "@/lib/kanban/financial-analysis";
 import { formatUbicacionCardSummary } from "@/lib/kanban/ubicaciones";
 import type { KanbanCardRow } from "@/lib/kanban/types";
 import { Button } from "@/components/ui/button";
@@ -70,8 +70,9 @@ export function KanbanCardPreview({
 }) {
   const p = card.process;
   const actionDisabled = archiving || removing;
-  const costosTotal = totalCostos(card.analisis_financiero_json);
-  const utilidad = ingresoNeto(card.monto_ofertado, card.analisis_financiero_json);
+  const financiero = recalcularAnalisis(card.analisis_financiero_json, card.monto_ofertado);
+  const costosTotal = totalCostos(financiero);
+  const utilidad = ingresoNeto(card.monto_ofertado, financiero);
 
   async function handleArchive(e: MouseEvent) {
     e.stopPropagation();

@@ -117,6 +117,31 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
     if (card) setSelectedCard(card);
   }, [initialCardId, cards]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/kanban/refresh-statuses", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ limit: 8 }),
+        });
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as { refreshed?: number };
+        if ((data.refreshed ?? 0) > 0 && !cancelled) {
+          await reloadBoard(q);
+        }
+      } catch {
+        /* refresh en segundo plano */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Solo al montar: el tablero carga rápido y los estados se actualizan en background.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const stats = useMemo(() => {
     const byColumn = Object.fromEntries(KANBAN_COLUMNS.map((col) => [col, grouped[col].length])) as Record<
       KanbanColumna,
@@ -129,7 +154,11 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
     setRefreshingStatuses(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/kanban/refresh-statuses", { method: "POST" });
+      const res = await fetch("/api/kanban/refresh-statuses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 30 }),
+      });
       const data = (await res.json()) as {
         ok?: boolean;
         error?: string;
