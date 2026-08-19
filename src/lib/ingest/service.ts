@@ -518,6 +518,50 @@ function appendCaCandidate(
   return true;
 }
 
+async function upsertDiscoveredCaBatch(
+  supabase: ReturnType<typeof createServiceClient>,
+  orgRut: string | null,
+  notifyFilters: Awaited<ReturnType<typeof loadOrgContentFilters>>,
+  pending: MpSyncPending,
+  normalizedList: NormalizedProcess[],
+  seen: Set<string>
+): Promise<void> {
+  const fresh: NormalizedProcess[] = [];
+  for (const normalized of normalizedList) {
+    if (!passesCaDiscoverFilter(normalized, notifyFilters)) continue;
+    if (seen.has(normalized.codigo_externo)) continue;
+    if (countCandidatesByTipo(pending, "compra_agil") >= MP_CA_CANDIDATE_MAX) break;
+    fresh.push(normalized);
+  }
+  if (fresh.length === 0) return;
+
+  const candidateRows = fresh.map((n) => ({
+    codigo_externo: n.codigo_externo,
+    tipo: n.tipo,
+    nombre: n.nombre,
+  }));
+  const toSync = await filterCandidatesNeedingSync(supabase, candidateRows, {
+    light: pending.light,
+  });
+  const toSyncCodes = new Set(toSync.map((c) => c.codigo_externo));
+
+  for (const normalized of fresh) {
+    if (!appendCaCandidate(pending, normalized, seen)) continue;
+    if (!toSyncCodes.has(normalized.codigo_externo)) continue;
+    try {
+      const result = await upsertProcess(supabase, normalized, orgRut, {
+        notifyFilters,
+        markDashboardSync: true,
+      });
+      if (result === "created") pending.created += 1;
+      else pending.updated += 1;
+    } catch (err) {
+      pending.errors.push(formatSyncProcessError(normalized.codigo_externo, err));
+    }
+  }
+  pending.fetched = pending.candidates.length;
+}
+
 async function fetchAllCompraAgilForBackfill(
   ticket: string,
   keywords: string[],
@@ -815,8 +859,10 @@ async function appendCompraAgilCandidates(
   notifyFilters: Awaited<ReturnType<typeof loadOrgContentFilters>>,
   onError: (msg: string) => void,
   lastSyncAt: string | null,
-  options?: { perRequest?: boolean }
+  options?: { perRequest?: boolean; deadlineMs?: number },
+  orgRut?: string | null
 ) {
+  const supabase = createServiceClient();
   const beforeLen = pending.candidates.length;
   const seen = new Set(pending.candidates.map((c) => c.codigo_externo));
   const discoverMode = pending.ca_discover_mode ?? "incremental";
@@ -824,6 +870,11 @@ async function appendCompraAgilCandidates(
     pending.ca_publicado_desde ?? compraAgilPublicadoDesdeIso(lastSyncAt, discoverMode);
   pending.ca_publicado_desde = publicadoDesde;
   const keywordPublicadoDesde = caKeywordSearchPublicadoDesdeIso();
+  const mpFast = { maxAttempts: 2 as const };
+  const caEstados = "publicada,cerrada,proveedor_seleccionado,desierta,cancelada";
+
+  const outOfTime = () =>
+    options?.deadlineMs !== undefined && Date.now() >= options.deadlineMs;
 
   if (!pending.ca_search_terms?.length) {
     pending.ca_search_terms = buildCompraAgilSearchTerms(
@@ -836,35 +887,31 @@ async function appendCompraAgilCandidates(
   const terms = pending.ca_search_terms;
   const offset = pending.ca_term_offset ?? 0;
   const keywordBatchSize = options?.perRequest
-    ? 4
+    ? 2
     : pending.cron_run
       ? CRON_CA_KEYWORDS_PER_BATCH
       : MP_CA_KEYWORDS_PER_BATCH;
+  const pagesPerKeyword = options?.perRequest ? 1 : MP_CA_PAGES_PER_KEYWORD;
 
   if (pending.cron_run && discoverMode === "nightly") {
     pending.ca_keywords_skipped = false;
   }
 
-  if (!pending.ca_keywords_skipped && offset < terms.length) {
+  if (!pending.ca_keywords_skipped && offset < terms.length && !outOfTime()) {
     try {
       const batch = await fetchCompraAgilForTerms(
         ticket,
         terms,
-        MP_CA_PAGES_PER_KEYWORD,
+        pagesPerKeyword,
         {
           startIndex: offset,
           batchSize: keywordBatchSize,
           publicadoDesde: keywordPublicadoDesde,
+          estado: caEstados,
+          ...mpFast,
         }
       );
-      for (const normalized of batch) {
-        if (countCandidatesByTipo(pending, "compra_agil") >= MP_CA_CANDIDATE_MAX) break;
-        if (pending.cron_run && countCandidatesByTipo(pending, "compra_agil") >= CRON_CA_CANDIDATE_CAP) {
-          break;
-        }
-        if (!passesCaDiscoverFilter(normalized, notifyFilters)) continue;
-        appendCaCandidate(pending, normalized, seen);
-      }
+      await upsertDiscoveredCaBatch(supabase, orgRut ?? null, notifyFilters, pending, batch, seen);
     } catch (err) {
       onError(`Compra ágil (keywords): ${err instanceof Error ? err.message : "Error"}`);
     }
@@ -880,18 +927,25 @@ async function appendCompraAgilCandidates(
 
   const ranKeywordBatch = !pending.ca_keywords_skipped && offset < terms.length;
 
-  if ((pending.ca_term_offset ?? 0) >= terms.length && !pending.ca_recent_scanned) {
+  if (
+    (pending.ca_term_offset ?? 0) >= terms.length &&
+    !pending.ca_recent_scanned &&
+    !outOfTime()
+  ) {
     const deferListing = options?.perRequest && ranKeywordBatch;
     if (!deferListing) {
       try {
-        const maxPages = pending.cron_run ? 4 : options?.perRequest ? 2 : 3;
+        const maxPages = pending.cron_run ? 4 : options?.perRequest ? 1 : 3;
         const rawItems = await fetchCompraAgilPublishedSince(ticket, publicadoDesde, maxPages);
-        for (const raw of rawItems) {
-          if (countCandidatesByTipo(pending, "compra_agil") >= MP_CA_CANDIDATE_MAX) break;
-          const normalized = normalizeCompraAgil(raw);
-          if (!passesCaDiscoverFilter(normalized, notifyFilters)) continue;
-          appendCaCandidate(pending, normalized, seen);
-        }
+        const normalizedList = rawItems.map((raw) => normalizeCompraAgil(raw));
+        await upsertDiscoveredCaBatch(
+          supabase,
+          orgRut ?? null,
+          notifyFilters,
+          pending,
+          normalizedList,
+          seen
+        );
       } catch (err) {
         onError(`Compra ágil (listado reciente): ${err instanceof Error ? err.message : "Error"}`);
       }
@@ -901,15 +955,12 @@ async function appendCompraAgilCandidates(
 
   if ((pending.ca_term_offset ?? 0) >= terms.length && pending.ca_recent_scanned) {
     pending.ca_fetched = true;
+    pending.index = pending.candidates.length;
   }
 
-  const supabase = createServiceClient();
-  const added = pending.candidates.slice(beforeLen);
-  const filteredAdded = await filterCandidatesNeedingSync(supabase, added, {
-    light: pending.light,
-  });
-  pending.candidates = [...pending.candidates.slice(0, beforeLen), ...filteredAdded];
-  pending.fetched = pending.candidates.length;
+  if (pending.candidates.length > beforeLen) {
+    pending.fetched = pending.candidates.length;
+  }
 }
 
 async function finalizeDashboardSync(
@@ -1016,8 +1067,8 @@ export interface DashboardSyncBatchOptions {
   maxBatchMs?: number;
 }
 
-/** Máx. ms por request HTTP de sync manual (Vercel corta ~300 s; el cliente encadena rondas). */
-const MANUAL_SYNC_PER_REQUEST_MS = 52_000;
+/** Máx. ms por request HTTP de sync manual (Vercel corta ~60 s en edge; el cliente encadena rondas). */
+const MANUAL_SYNC_PER_REQUEST_MS = 48_000;
 const MANUAL_SYNC_BUDGET_MS = 240_000;
 const MANUAL_CANDIDATE_CAP = 50;
 
@@ -1104,6 +1155,9 @@ export async function runDashboardSyncBatch(
   }
 
   if (scope === "compra_agil" && !pending.ca_fetched) {
+    const batchBudgetMs =
+      options.maxBatchMs ??
+      (options.serverSide ? MANUAL_SYNC_BUDGET_MS : SYNC_BATCH_BUDGET_MS);
     const lastSyncAt = await getLastMpSyncAt(supabase, "compra_agil");
     await appendCompraAgilCandidates(
       ticket,
@@ -1111,10 +1165,21 @@ export async function runDashboardSyncBatch(
       notifyFilters,
       (msg) => pending!.errors.push(msg),
       lastSyncAt,
-      { perRequest: Boolean(options.maxBatchMs && options.maxBatchMs <= 60_000) }
+      {
+        perRequest: Boolean(options.maxBatchMs && options.maxBatchMs <= 60_000),
+        deadlineMs: Date.now() + batchBudgetMs - 8_000,
+      },
+      orgRut
     );
     await saveMpSyncPending(supabase, scope, pending);
+    if (pending.ca_fetched) {
+      return finalizeDashboardSync(supabase, pending, notifyFilters, scope);
+    }
     return buildBatchResult(pending, false, "compra_agil");
+  }
+
+  if (scope === "compra_agil" && pending.ca_fetched) {
+    return finalizeDashboardSync(supabase, pending, notifyFilters, scope);
   }
 
   const batchBudgetMs =

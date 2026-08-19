@@ -4,7 +4,7 @@ import { runFastManualSync } from "@/lib/ingest/service";
 import type { SyncScope } from "@/lib/ingest/sync-refresh";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 function parseScope(value: unknown): Exclude<SyncScope, "all"> {
   if (value === "licitacion") return "licitacion";

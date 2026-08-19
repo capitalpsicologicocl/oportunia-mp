@@ -43,9 +43,10 @@ const RETRYABLE_HTTP = new Set([429, 502, 503, 504]);
 
 async function fetchWithRetry(
   doFetch: () => Promise<Response>,
-  label: string
+  label: string,
+  maxAttempts = 5
 ): Promise<Response> {
-  const waits = [0, 2000, 5000, 10000, 15000];
+  const waits = [0, 2000, 5000, 10000, 15000].slice(0, maxAttempts);
   for (let attempt = 0; attempt < waits.length; attempt += 1) {
     if (waits[attempt] > 0) await sleepMs(waits[attempt]);
     const response = await doFetch();
@@ -79,7 +80,8 @@ async function fetchJson<T>(url: string): Promise<T | null> {
 async function fetchApi2<T>(
   path: string,
   ticket: string,
-  params?: Record<string, string | number>
+  params?: Record<string, string | number>,
+  options?: { maxAttempts?: number }
 ): Promise<T | null> {
   const url = new URL(path, COMPRA_AGIL_BASE);
   if (params) {
@@ -96,7 +98,8 @@ async function fetchApi2<T>(
         headers: { Accept: "application/json", ticket },
         next: { revalidate: 0 },
       }),
-    path.includes("compra-agil") ? `compra-agil ${path}` : path
+    path.includes("compra-agil") ? `compra-agil ${path}` : path,
+    options?.maxAttempts ?? 5
   );
 
   if (!response.ok) {
@@ -454,7 +457,7 @@ export async function fetchCompraAgilByQuery(
   ticket: string,
   q: string,
   maxPages = 4,
-  options?: { publicadoDesde?: string; estado?: string }
+  options?: { publicadoDesde?: string; estado?: string; maxAttempts?: number }
 ): Promise<unknown[]> {
   const query = stripAccents(q).trim().toLowerCase();
   if (query.length < 3) return [];
@@ -473,7 +476,9 @@ export async function fetchCompraAgilByQuery(
     if (options?.publicadoDesde) params.publicado_desde = options.publicadoDesde;
     if (options?.estado) params.estado = options.estado;
 
-    const data = await fetchApi2<CompraAgilListResponse>("/v2/compra-agil", ticket, params);
+    const data = await fetchApi2<CompraAgilListResponse>("/v2/compra-agil", ticket, params, {
+      maxAttempts: options?.maxAttempts,
+    });
 
     const pageItems = data?.items ?? data?.Items ?? [];
     items.push(...pageItems);
@@ -526,7 +531,13 @@ export async function fetchCompraAgilForTerms(
   ticket: string,
   terms: string[],
   maxPagesPerTerm = 2,
-  options?: { startIndex?: number; batchSize?: number; publicadoDesde?: string }
+  options?: {
+    startIndex?: number;
+    batchSize?: number;
+    publicadoDesde?: string;
+    maxAttempts?: number;
+    estado?: string;
+  }
 ): Promise<NormalizedProcess[]> {
   const seen = new Set<string>();
   const results: NormalizedProcess[] = [];
@@ -541,10 +552,6 @@ export async function fetchCompraAgilForTerms(
   const start = options?.startIndex ?? 0;
   const batchSize = options?.batchSize ?? unique.length;
   const batch = unique.slice(start, start + batchSize);
-  const queryOptions = {
-    publicadoDesde: options?.publicadoDesde,
-    estado: "publicada",
-  };
 
   for (const term of batch) {
     try {
@@ -552,7 +559,11 @@ export async function fetchCompraAgilForTerms(
         ticket,
         term,
         maxPagesPerTerm,
-        queryOptions
+        {
+          publicadoDesde: options?.publicadoDesde,
+          estado: options?.estado,
+          maxAttempts: options?.maxAttempts,
+        }
       );
       for (const raw of rawItems) {
         const normalized = normalizeCompraAgil(raw);

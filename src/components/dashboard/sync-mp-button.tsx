@@ -142,8 +142,8 @@ export function SyncMercadoPublicoButton({
     setResult(null);
     setProgress(
       isFirstSync
-        ? "Sincronización inicial en servidor (puede tardar varios minutos)…"
-        : "Actualizando dashboard en servidor (varias rondas cortas, ~3–5 min)…"
+        ? "Sincronización inicial (varias rondas cortas, ~2–4 min)…"
+        : "Actualizando dashboard (rondas de ~45 s, el tablero se refresca en cada paso)…"
     );
     startSessionKeepAlive();
 
@@ -175,15 +175,19 @@ export function SyncMercadoPublicoButton({
             setProgress(
               `Timeout del servidor, reintentando (${timeoutRetries}/${maxTimeoutRetries})…`
             );
-            await new Promise((resolve) => setTimeout(resolve, 2500));
+            await new Promise((resolve) => setTimeout(resolve, 1500));
             rounds -= 1;
             continueBatch = true;
             continue;
           }
+          if (isGatewayTimeout) {
+            router.refresh();
+            throw new Error(
+              "El servidor tardó demasiado en esta ronda. Pulsa Sincronizar de nuevo; retoma donde quedó y ya guardó avances parciales."
+            );
+          }
           throw new Error(
-            isGatewayTimeout
-              ? "El servidor tardó demasiado. Pulsa Sincronizar de nuevo; retomará donde quedó."
-              : `Respuesta inválida del servidor (${res.status}): ${raw.slice(0, 100)}`
+            `Respuesta inválida del servidor (${res.status}): ${raw.slice(0, 100)}`
           );
         }
 
@@ -201,13 +205,22 @@ export function SyncMercadoPublicoButton({
               ? "importando detalle"
               : data.phase === "discover"
                 ? "descubriendo"
-                : "procesando";
+                : data.phase === "finalize"
+                  ? "finalizando"
+                  : "procesando";
 
         setProgress(
           total > 0
             ? `${phaseLabel}: ${processed}/${total} (paso ${rounds})…`
             : `${phaseLabel} (paso ${rounds})…`
         );
+
+        if (
+          data.summary &&
+          ((data.summary.created ?? 0) > 0 || (data.summary.updated ?? 0) > 0)
+        ) {
+          router.refresh();
+        }
 
         if (data.done) break;
         continueBatch = true;
@@ -309,7 +322,7 @@ export function SyncMercadoPublicoButton({
       {!isFirstSync && !loading && (
         <p className="text-xs text-muted-foreground">
           {isCa
-            ? "Sync en servidor: busca por tus keywords/rubros (como MP) y novedades recientes (~2–3 min)."
+            ? "Sync en servidor: busca por tus keywords/rubros (~45 s por ronda). El dashboard se actualiza en cada paso."
             : "Sync en servidor: busca licitaciones recientes (~1–2 min). Cron nocturno 00:01."}
         </p>
       )}
