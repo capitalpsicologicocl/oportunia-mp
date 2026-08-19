@@ -164,15 +164,22 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
         error?: string;
         refreshed?: number;
         notFound?: number;
+        errors?: string[];
       };
       if (!res.ok || !data.ok) throw new Error(data.error ?? "No se pudo actualizar");
 
       await reloadBoard();
-      setMessage(
-        data.refreshed && data.refreshed > 0
-          ? `${data.refreshed} tarjeta${data.refreshed !== 1 ? "s" : ""} actualizada${data.refreshed !== 1 ? "s" : ""} desde MP.`
-          : "Estados al día (sin cambios en MP)."
-      );
+      if (data.errors?.length) {
+        setMessage(
+          `${data.refreshed ?? 0} actualizada${data.refreshed === 1 ? "" : "s"}. ${data.errors.length} error${data.errors.length === 1 ? "" : "es"} MP (ej. ${data.errors[0]}).`
+        );
+      } else {
+        setMessage(
+          data.refreshed && data.refreshed > 0
+            ? `${data.refreshed} tarjeta${data.refreshed !== 1 ? "s" : ""} actualizada${data.refreshed !== 1 ? "s" : ""} desde MP.`
+            : "Estados al día (sin cambios en MP)."
+        );
+      }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Error al actualizar estados");
     } finally {

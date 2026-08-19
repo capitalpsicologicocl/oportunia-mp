@@ -279,7 +279,12 @@ function isProveedorSeleccionado(proveedor: Record<string, unknown>): boolean {
 
 function extractEstadoCodigo(item: Record<string, unknown>): string | null {
   const estado = item.estado ?? item.Estado;
-  if (typeof estado === "string") return estado.trim().toLowerCase();
+  if (typeof estado === "string") {
+    const trimmed = estado.trim().toLowerCase();
+    if (/^(publicada|cerrada|desierta|cancelada|proveedor_seleccionado|oc_emitida)$/.test(trimmed)) {
+      return trimmed;
+    }
+  }
   if (estado && typeof estado === "object") {
     const nested = estado as Record<string, unknown>;
     return pickString(nested.codigo, nested.Codigo)?.trim().toLowerCase() ?? null;
@@ -573,9 +578,49 @@ export async function fetchCompraAgilRange(ticket: string, desdeIso: string, has
   return [];
 }
 
+/** Busca una CA por código en el listado (más estable que GET /v2/compra-agil/{codigo}). */
+async function fetchCompraAgilListItemByCodigo(
+  ticket: string,
+  codigo: string,
+  maxPages = 3
+): Promise<Record<string, unknown> | null> {
+  const trimmed = codigo.trim();
+  if (!trimmed) return null;
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const data = await fetchApi2<CompraAgilListResponse>("/v2/compra-agil", ticket, {
+      q: trimmed,
+      tamano_pagina: 50,
+      numero_pagina: page,
+    });
+    const items = data?.items ?? data?.Items ?? [];
+    const match = items.find((raw) => {
+      const item = raw as Record<string, unknown>;
+      return pickString(item.codigo, item.Codigo) === trimmed;
+    }) as Record<string, unknown> | undefined;
+    if (match) return match;
+
+    const totalPages = Math.max(1, data?.paginacion?.total_paginas ?? 1);
+    if (page >= totalPages || items.length === 0) break;
+    await sleepMs(MP_COMPRA_AGIL_TERM_DELAY_MS);
+  }
+
+  return null;
+}
+
 export async function fetchCompraAgilByCodigo(ticket: string, codigo: string) {
+  const trimmed = codigo.trim();
+  if (!trimmed) return null;
+
+  try {
+    const fromList = await fetchCompraAgilListItemByCodigo(ticket, trimmed);
+    if (fromList) return fromList;
+  } catch {
+    // El detalle a veces responde cuando el listado no encuentra coincidencia exacta.
+  }
+
   return fetchApi2<Record<string, unknown>>(
-    `/v2/compra-agil/${encodeURIComponent(codigo)}`,
+    `/v2/compra-agil/${encodeURIComponent(trimmed)}`,
     ticket
   );
 }
@@ -693,8 +738,12 @@ export function normalizeCompraAgil(raw: unknown): NormalizedProcess {
   const estado = extractEstado(item);
   const proveedor = extractProveedorSeleccionado(item);
   const estadoCodigo = extractEstadoCodigo(item);
+  const motivos = (item.motivos ?? item.Motivos ?? {}) as Record<string, unknown>;
+  const motivoSeleccion = pickString(motivos.motivo_seleccion, motivos.motivoSeleccion);
   const estadoNormalizado =
-    proveedor.rut || (estadoCodigo && /proveedor_seleccionado|oc_emitida/.test(estadoCodigo))
+    proveedor.rut ||
+    (estadoCodigo && /proveedor_seleccionado|oc_emitida/.test(estadoCodigo)) ||
+    motivoSeleccion
       ? "Proveedor seleccionado"
       : estado;
 

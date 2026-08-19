@@ -1809,7 +1809,7 @@ export async function refreshKanbanPipelineProcesses(
       const bSync = b.last_synced_at ? new Date(b.last_synced_at).getTime() : 0;
       return aSync - bSync;
     })
-    .slice(0, limit)
+    .slice(0, options?.all ? pipelineRows.length : limit)
     .map((p) => ({ codigo_externo: p.codigo_externo, tipo: p.tipo }));
 
   if (candidates.length === 0) {
