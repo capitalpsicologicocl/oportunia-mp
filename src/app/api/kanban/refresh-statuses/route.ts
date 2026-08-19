@@ -11,10 +11,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Inicia sesión" }, { status: 401 });
   }
 
-  const body = (await request.json().catch(() => ({}))) as { limit?: number };
+  const body = (await request.json().catch(() => ({}))) as { limit?: number; all?: boolean };
 
   try {
-    const summary = await refreshKanbanPipelineProcesses(body.limit ?? 30);
+    const summary = await refreshKanbanPipelineProcesses(body.limit ?? 30, {
+      all: body.all === true,
+    });
     return NextResponse.json({ ok: true, ...summary });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Error desconocido";

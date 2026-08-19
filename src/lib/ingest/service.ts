@@ -274,8 +274,16 @@ function mergeEstado(
   existing: string | null | undefined
 ): string | null {
   const next = incoming?.trim();
-  if (next) return next;
-  return existing?.trim() || null;
+  const prev = existing?.trim();
+  if (!next) return prev || null;
+  if (!prev) return next;
+  if (/proveedor seleccionado|proveedor_seleccionado|oc emitida|oc_emitida|adjudicad/i.test(next)) {
+    return next;
+  }
+  if (/proveedor seleccionado|proveedor_seleccionado|oc emitida|oc_emitida|adjudicad/i.test(prev)) {
+    return prev;
+  }
+  return next;
 }
 
 function mergeString(
@@ -1713,16 +1721,17 @@ function kanbanPipelineNeedsRefresh(row: {
   last_synced_at: string | null;
 }): boolean {
   const pastCierre = isPastCierre(row.fecha_cierre, row.hora_cierre);
+  const estado = row.estado ?? "";
 
-  if (pastCierre && !row.adjudicado_a_mi && !isTerminalMpEstado(row.estado)) {
+  if (/cerrad|cierre vencido/i.test(estado) && !/proveedor seleccionado|proveedor_seleccionado|adjudicad/i.test(estado)) {
     return true;
   }
 
-  if (pastCierre && !row.adjudicado_rut && estadoLooksStale(row.estado)) {
+  if (pastCierre && !row.adjudicado_a_mi && !isTerminalMpEstado(estado)) {
     return true;
   }
 
-  if (row.adjudicado_rut && estadoLooksStale(row.estado)) {
+  if (pastCierre && !row.adjudicado_rut) {
     return true;
   }
 
@@ -1731,7 +1740,10 @@ function kanbanPipelineNeedsRefresh(row: {
 }
 
 /** Actualiza estados MP de procesos en el Kanban (prioriza cierre vencido). */
-export async function refreshKanbanPipelineProcesses(limit = 25): Promise<{
+export async function refreshKanbanPipelineProcesses(
+  limit = 25,
+  options?: { all?: boolean }
+): Promise<{
   refreshed: number;
   notFound: number;
   errors: string[];
@@ -1775,14 +1787,20 @@ export async function refreshKanbanPipelineProcesses(limit = 25): Promise<{
     last_synced_at: string | null;
   };
 
-  const candidates = (cardRows ?? [])
+  let pipelineRows = (cardRows ?? [])
     .map((row) => {
       const process = row.processes as PipelineRow | PipelineRow[] | null;
       const p = Array.isArray(process) ? process[0] : process;
       if (!p?.codigo_externo) return null;
       return p;
     })
-    .filter((p): p is PipelineRow => p !== null && kanbanPipelineNeedsRefresh(p))
+    .filter((p): p is PipelineRow => p !== null);
+
+  if (!options?.all) {
+    pipelineRows = pipelineRows.filter((p) => kanbanPipelineNeedsRefresh(p));
+  }
+
+  const candidates = pipelineRows
     .sort((a, b) => {
       const aPast = isPastCierre(a.fecha_cierre, a.hora_cierre) ? 0 : 1;
       const bPast = isPastCierre(b.fecha_cierre, b.hora_cierre) ? 0 : 1;

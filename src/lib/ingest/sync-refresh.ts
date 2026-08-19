@@ -16,7 +16,9 @@ export type ProcessRefreshSnapshot = {
 };
 
 export function isTerminalMpEstado(estado: string | null | undefined): boolean {
-  return /adjudicad|desiert|revocad|cancelad/i.test(estado ?? "");
+  return /adjudicad|desiert|revocad|cancelad|proveedor seleccionado|proveedor_seleccionado|oc emitida|oc_emitida/i.test(
+    estado ?? ""
+  );
 }
 
 export function isClosedMpEstado(estado: string | null | undefined): boolean {
@@ -34,7 +36,7 @@ export function mpEstadoDisplayLabel(
   }
 
   const e = (estado ?? "").toLowerCase();
-  if (/proveedor seleccionado|adjudicad/.test(e) || adjudicadoRut) {
+  if (/proveedor seleccionado|proveedor_seleccionado|oc emitida|oc_emitida|adjudicad/.test(e) || adjudicadoRut) {
     return { label: "Proveedor seleccionado", tone: "selected" };
   }
   if (/desiert|cancelad|revocad/.test(e)) {

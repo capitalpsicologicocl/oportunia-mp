@@ -277,14 +277,75 @@ function isProveedorSeleccionado(proveedor: Record<string, unknown>): boolean {
   return seleccion?.proveedor_seleccionado === true || seleccion?.proveedor_seleccionado === 1;
 }
 
+function extractEstadoCodigo(item: Record<string, unknown>): string | null {
+  const estado = item.estado ?? item.Estado;
+  if (typeof estado === "string") return estado.trim().toLowerCase();
+  if (estado && typeof estado === "object") {
+    const nested = estado as Record<string, unknown>;
+    return pickString(nested.codigo, nested.Codigo)?.trim().toLowerCase() ?? null;
+  }
+  return null;
+}
+
+function humanizeEstadoCodigo(codigo: string | null | undefined): string | null {
+  if (!codigo) return null;
+  const normalized = codigo.trim().toLowerCase().replace(/\s+/g, "_");
+  switch (normalized) {
+    case "proveedor_seleccionado":
+      return "Proveedor seleccionado";
+    case "oc_emitida":
+      return "OC emitida";
+    case "publicada":
+      return "Publicada";
+    case "cerrada":
+      return "Cerrada";
+    case "desierta":
+      return "Desierta";
+    case "cancelada":
+      return "Cancelada";
+    default:
+      return codigo.trim();
+  }
+}
+
+function extractEstado(item: Record<string, unknown>): string | null {
+  const codigo = extractEstadoCodigo(item);
+  if (codigo) {
+    return humanizeEstadoCodigo(codigo);
+  }
+
+  const estado = item.estado ?? item.Estado;
+  if (typeof estado === "string") return estado.trim();
+  if (estado && typeof estado === "object") {
+    const nested = estado as Record<string, unknown>;
+    return pickString(nested.glosa, nested.Glosa);
+  }
+  return null;
+}
+
+function cotizacionIndicaSeleccion(proveedor: Record<string, unknown>): boolean {
+  if (isProveedorSeleccionado(proveedor)) return true;
+
+  const estadoCot = (proveedor.estado_cotizacion ?? proveedor.EstadoCotizacion) as
+    | Record<string, unknown>
+    | undefined;
+  const glosa = pickString(estadoCot?.glosa, estadoCot?.Glosa)?.toLowerCase() ?? "";
+  return /seleccion|adjudic|aceptad|ganador|vencedor/.test(glosa);
+}
+
 function extractProveedorSeleccionado(item: Record<string, unknown>): {
   rut: string | null;
   nombre: string | null;
 } {
   const proveedores = item.proveedores_cotizando ?? item.ProveedoresCotizando;
+  const estadoCodigo = extractEstadoCodigo(item);
+  const seleccionConfirmada = Boolean(
+    estadoCodigo && /proveedor_seleccionado|oc_emitida/.test(estadoCodigo)
+  );
+
   if (Array.isArray(proveedores)) {
     const selected = proveedores.find((p) =>
-      isProveedorSeleccionado(p as Record<string, unknown>)
+      cotizacionIndicaSeleccion(p as Record<string, unknown>)
     ) as Record<string, unknown> | undefined;
     if (selected) {
       return {
@@ -292,6 +353,33 @@ function extractProveedorSeleccionado(item: Record<string, unknown>): {
         nombre: pickString(selected.razon_social, selected.razonSocial),
       };
     }
+
+    if (seleccionConfirmada && proveedores.length === 1) {
+      const only = proveedores[0] as Record<string, unknown>;
+      return {
+        rut: pickString(only.rut_proveedor, only.rutProveedor),
+        nombre: pickString(only.razon_social, only.razonSocial),
+      };
+    }
+  }
+
+  const ordenCompra = (item.orden_compra ?? item.OrdenCompra ?? {}) as Record<string, unknown>;
+  const rutOrden = pickString(
+    ordenCompra.rut_proveedor,
+    ordenCompra.rutProveedor,
+    ordenCompra.rut_adjudicado,
+    ordenCompra.rutAdjudicado
+  );
+  if (rutOrden) {
+    return {
+      rut: rutOrden,
+      nombre: pickString(
+        ordenCompra.razon_social,
+        ordenCompra.razonSocial,
+        ordenCompra.nombre_proveedor,
+        ordenCompra.nombreProveedor
+      ),
+    };
   }
 
   const adjudicacion = (item.adjudicacion ?? item.Adjudicacion ?? {}) as Record<string, unknown>;
@@ -299,16 +387,6 @@ function extractProveedorSeleccionado(item: Record<string, unknown>): {
     rut: pickString(adjudicacion.rutProveedor, adjudicacion.rut_proveedor),
     nombre: pickString(adjudicacion.nombreProveedor, adjudicacion.razon_social),
   };
-}
-
-function extractEstado(item: Record<string, unknown>): string | null {
-  const estado = item.estado ?? item.Estado;
-  if (typeof estado === "string") return estado;
-  if (estado && typeof estado === "object") {
-    const nested = estado as Record<string, unknown>;
-    return pickString(nested.glosa, nested.Glosa, nested.codigo, nested.Codigo);
-  }
-  return null;
 }
 
 function extractUnspscFromItem(item: Record<string, unknown>): string[] {
@@ -614,8 +692,9 @@ export function normalizeCompraAgil(raw: unknown): NormalizedProcess {
   const descripcion = pickString(item.descripcion, item.Descripcion);
   const estado = extractEstado(item);
   const proveedor = extractProveedorSeleccionado(item);
+  const estadoCodigo = extractEstadoCodigo(item);
   const estadoNormalizado =
-    proveedor.rut && /publicad|evaluaci|abiert|activ/i.test(estado ?? "")
+    proveedor.rut || (estadoCodigo && /proveedor_seleccionado|oc_emitida/.test(estadoCodigo))
       ? "Proveedor seleccionado"
       : estado;
 

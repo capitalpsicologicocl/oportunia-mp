@@ -124,11 +124,11 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
         const res = await fetch("/api/kanban/refresh-statuses", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ limit: 8 }),
+          body: JSON.stringify({ limit: 20, all: true }),
         });
         if (!res.ok || cancelled) return;
         const data = (await res.json()) as { refreshed?: number };
-        if ((data.refreshed ?? 0) > 0 && !cancelled) {
+        if (!cancelled) {
           await reloadBoard(q);
         }
       } catch {
@@ -157,7 +157,7 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
       const res = await fetch("/api/kanban/refresh-statuses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ limit: 30 }),
+        body: JSON.stringify({ limit: 40, all: true }),
       });
       const data = (await res.json()) as {
         ok?: boolean;
