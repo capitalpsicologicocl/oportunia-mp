@@ -654,6 +654,7 @@ interface MpSyncPending {
   ca_publicado_desde?: string;
   ca_recent_scanned?: boolean;
   ca_keywords_skipped?: boolean;
+  ca_fast_manual?: boolean;
   cron_run?: boolean;
   candidates_prioritized?: boolean;
   finalized?: boolean;
@@ -884,10 +885,15 @@ async function appendCompraAgilCandidates(
     pending.ca_term_offset = pending.ca_term_offset ?? 0;
   }
 
+  if (pending.ca_fast_manual && !pending.ca_keywords_skipped) {
+    pending.ca_keywords_skipped = true;
+    pending.ca_term_offset = pending.ca_search_terms.length;
+  }
+
   const terms = pending.ca_search_terms;
   const offset = pending.ca_term_offset ?? 0;
   const keywordBatchSize = options?.perRequest
-    ? 2
+    ? MANUAL_FAST_KEYWORD_BATCH
     : pending.cron_run
       ? CRON_CA_KEYWORDS_PER_BATCH
       : MP_CA_KEYWORDS_PER_BATCH;
@@ -1028,7 +1034,7 @@ function isRecentScopeSync(lastSyncAt: string | null): boolean {
 
 async function initCaSyncPending(
   supabase: ReturnType<typeof createServiceClient>,
-  options?: { cron?: boolean }
+  options?: { cron?: boolean; fastManual?: boolean }
 ): Promise<MpSyncPending> {
   const lastSyncAt = await getLastMpSyncAt(supabase, "compra_agil");
   const light = isRecentScopeSync(lastSyncAt) && !options?.cron;
@@ -1037,6 +1043,7 @@ async function initCaSyncPending(
     : options?.cron
       ? "nightly"
       : "incremental";
+  const fastManual = Boolean(options?.fastManual && lastSyncAt && !options?.cron);
 
   return {
     candidates: [],
@@ -1052,7 +1059,8 @@ async function initCaSyncPending(
     ca_discover_mode: discoverMode,
     ca_publicado_desde: compraAgilPublicadoDesdeIso(lastSyncAt, discoverMode),
     cron_run: options?.cron ?? false,
-    ca_keywords_skipped: false,
+    ca_keywords_skipped: fastManual,
+    ca_fast_manual: fastManual,
     light,
   };
 }
@@ -1067,8 +1075,9 @@ export interface DashboardSyncBatchOptions {
   maxBatchMs?: number;
 }
 
-/** Máx. ms por request HTTP de sync manual (Vercel corta ~60 s en edge; el cliente encadena rondas). */
-const MANUAL_SYNC_PER_REQUEST_MS = 48_000;
+/** Máx. ms por request HTTP de sync manual (Vercel corta ~60 s). */
+const MANUAL_SYNC_PER_REQUEST_MS = 32_000;
+const MANUAL_FAST_KEYWORD_BATCH = 3;
 const MANUAL_SYNC_BUDGET_MS = 240_000;
 const MANUAL_CANDIDATE_CAP = 50;
 
@@ -1086,10 +1095,7 @@ export async function runFastManualSync(
   let continueBatch = options?.continueBatch ?? false;
 
   if (!continueBatch) {
-    const existing = await loadMpSyncPending(supabase, scope);
-    if (existing && !existing.finalized) {
-      continueBatch = true;
-    }
+    await saveMpSyncPending(supabase, scope, null);
   }
 
   const result = await runDashboardSyncBatch({
@@ -1135,7 +1141,7 @@ export async function runDashboardSyncBatch(
       await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }));
     }
     if (scope === "compra_agil") {
-      pending = await initCaSyncPending(supabase, { cron });
+      pending = await initCaSyncPending(supabase, { cron, fastManual: !cron });
     } else {
       const lastSyncAt = await getLastMpSyncAt(supabase, "licitacion");
       const discoverErrors: string[] = [];
@@ -1210,7 +1216,7 @@ export async function runDashboardSyncBatch(
         if (result === "created") pending.created += 1;
         else pending.updated += 1;
       }
-      await delay(120);
+      await delay(50);
     } catch (err) {
       pending.errors.push(formatSyncProcessError(candidate.codigo_externo, err));
     }
@@ -1462,13 +1468,16 @@ export async function runBackfillIngestion(daysBack = 45): Promise<IngestSummary
 export async function refreshProcessByCodigo(
   ticket: string,
   codigo: string,
-  tipo: ProcessTipo
+  tipo: ProcessTipo,
+  options?: { listOnly?: boolean }
 ): Promise<NormalizedProcess | null> {
   if (tipo === "licitacion") {
     const raw = await fetchLicitacionByCodigo(ticket, codigo);
     return raw ? normalizeLicitacion(raw) : null;
   }
-  const raw = await fetchCompraAgilByCodigo(ticket, codigo);
+  const raw = await fetchCompraAgilByCodigo(ticket, codigo, {
+    listOnly: options?.listOnly ?? true,
+  });
   return raw ? normalizeCompraAgil(raw) : null;
 }
 
@@ -1500,7 +1509,7 @@ export async function refreshProcessInDb(
   return "updated";
 }
 
-const REFRESH_CONCURRENCY = 4;
+const REFRESH_CONCURRENCY = 2;
 
 async function refreshProcessRowsInParallel(
   rows: Array<{ codigo_externo: string; tipo: ProcessTipo }>,
@@ -1521,7 +1530,8 @@ async function refreshProcessRowsInParallel(
       const normalized = await refreshProcessByCodigo(
         options.ticket,
         row.codigo_externo,
-        row.tipo
+        row.tipo,
+        { listOnly: row.tipo === "compra_agil" }
       );
       if (!normalized) {
         notFound += 1;
@@ -1806,16 +1816,18 @@ function kanbanPipelineNeedsRefresh(row: {
 
 /** Actualiza estados MP de procesos en el Kanban (prioriza cierre vencido). */
 export async function refreshKanbanPipelineProcesses(
-  limit = 25,
-  options?: { all?: boolean }
+  limit = 4,
+  options?: { all?: boolean; offset?: number }
 ): Promise<{
   refreshed: number;
   notFound: number;
   errors: string[];
+  hasMore: boolean;
+  total: number;
 }> {
   const { supabase, orgRut, ticket } = await getOrgContext();
   if (!ticket) {
-    return { refreshed: 0, notFound: 0, errors: [] };
+    return { refreshed: 0, notFound: 0, errors: [], hasMore: false, total: 0 };
   }
 
   const { data: cardRows, error } = await supabase
@@ -1865,20 +1877,28 @@ export async function refreshKanbanPipelineProcesses(
     pipelineRows = pipelineRows.filter((p) => kanbanPipelineNeedsRefresh(p));
   }
 
-  const candidates = pipelineRows
-    .sort((a, b) => {
-      const aPast = isPastCierre(a.fecha_cierre, a.hora_cierre) ? 0 : 1;
-      const bPast = isPastCierre(b.fecha_cierre, b.hora_cierre) ? 0 : 1;
-      if (aPast !== bPast) return aPast - bPast;
-      const aSync = a.last_synced_at ? new Date(a.last_synced_at).getTime() : 0;
-      const bSync = b.last_synced_at ? new Date(b.last_synced_at).getTime() : 0;
-      return aSync - bSync;
-    })
-    .slice(0, options?.all ? pipelineRows.length : limit)
+  const sorted = pipelineRows.sort((a, b) => {
+    const aPast = isPastCierre(a.fecha_cierre, a.hora_cierre) ? 0 : 1;
+    const bPast = isPastCierre(b.fecha_cierre, b.hora_cierre) ? 0 : 1;
+    if (aPast !== bPast) return aPast - bPast;
+    const aSync = a.last_synced_at ? new Date(a.last_synced_at).getTime() : 0;
+    const bSync = b.last_synced_at ? new Date(b.last_synced_at).getTime() : 0;
+    return aSync - bSync;
+  });
+
+  const offset = options?.offset ?? 0;
+  const candidates = sorted
+    .slice(offset, offset + limit)
     .map((p) => ({ codigo_externo: p.codigo_externo, tipo: p.tipo }));
 
   if (candidates.length === 0) {
-    return { refreshed: 0, notFound: 0, errors: [] };
+    return {
+      refreshed: 0,
+      notFound: 0,
+      errors: [],
+      hasMore: false,
+      total: sorted.length,
+    };
   }
 
   const notifyFilters = await loadOrgContentFilters();
@@ -1890,7 +1910,13 @@ export async function refreshKanbanPipelineProcesses(
     upsertOptions: { markDashboardSync: true },
   });
 
-  return { refreshed: updated, notFound, errors };
+  return {
+    refreshed: updated,
+    notFound,
+    errors,
+    hasMore: offset + candidates.length < sorted.length,
+    total: sorted.length,
+  };
 }
 
 export async function maybeRefreshSearchProcess(q?: string): Promise<void> {

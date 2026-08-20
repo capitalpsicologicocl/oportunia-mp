@@ -593,17 +593,44 @@ export async function fetchCompraAgilRange(ticket: string, desdeIso: string, has
 async function fetchCompraAgilListItemByCodigo(
   ticket: string,
   codigo: string,
-  maxPages = 3
+  maxPages = 1,
+  maxAttempts = 2
 ): Promise<Record<string, unknown> | null> {
   const trimmed = codigo.trim();
   if (!trimmed) return null;
 
+  try {
+    const byId = await fetchApi2<CompraAgilListResponse>(
+      "/v2/compra-agil",
+      ticket,
+      { id: trimmed },
+      { maxAttempts }
+    );
+    const idItems = byId?.items ?? byId?.Items ?? [];
+    const idMatch = idItems.find((raw) => {
+      const item = raw as Record<string, unknown>;
+      return pickString(item.codigo, item.Codigo) === trimmed;
+    }) as Record<string, unknown> | undefined;
+    if (idMatch) return idMatch;
+    if (idItems[0]) {
+      const only = idItems[0] as Record<string, unknown>;
+      if (pickString(only.codigo, only.Codigo) === trimmed) return only;
+    }
+  } catch {
+    // id no disponible en todos los tickets; continuar con búsqueda q
+  }
+
   for (let page = 1; page <= maxPages; page += 1) {
-    const data = await fetchApi2<CompraAgilListResponse>("/v2/compra-agil", ticket, {
-      q: trimmed,
-      tamano_pagina: 50,
-      numero_pagina: page,
-    });
+    const data = await fetchApi2<CompraAgilListResponse>(
+      "/v2/compra-agil",
+      ticket,
+      {
+        q: trimmed,
+        tamano_pagina: 50,
+        numero_pagina: page,
+      },
+      { maxAttempts }
+    );
     const items = data?.items ?? data?.Items ?? [];
     const match = items.find((raw) => {
       const item = raw as Record<string, unknown>;
@@ -613,27 +640,34 @@ async function fetchCompraAgilListItemByCodigo(
 
     const totalPages = Math.max(1, data?.paginacion?.total_paginas ?? 1);
     if (page >= totalPages || items.length === 0) break;
-    await sleepMs(MP_COMPRA_AGIL_TERM_DELAY_MS);
+    if (maxPages > 1) await sleepMs(MP_COMPRA_AGIL_TERM_DELAY_MS);
   }
 
   return null;
 }
 
-export async function fetchCompraAgilByCodigo(ticket: string, codigo: string) {
+export async function fetchCompraAgilByCodigo(
+  ticket: string,
+  codigo: string,
+  options?: { listOnly?: boolean }
+) {
   const trimmed = codigo.trim();
   if (!trimmed) return null;
 
-  try {
-    const fromList = await fetchCompraAgilListItemByCodigo(ticket, trimmed);
-    if (fromList) return fromList;
-  } catch {
-    // El detalle a veces responde cuando el listado no encuentra coincidencia exacta.
-  }
+  const fromList = await fetchCompraAgilListItemByCodigo(ticket, trimmed, 1, 2);
+  if (fromList) return fromList;
+  if (options?.listOnly) return null;
 
-  return fetchApi2<Record<string, unknown>>(
-    `/v2/compra-agil/${encodeURIComponent(trimmed)}`,
-    ticket
-  );
+  try {
+    return await fetchApi2<Record<string, unknown>>(
+      `/v2/compra-agil/${encodeURIComponent(trimmed)}`,
+      ticket,
+      undefined,
+      { maxAttempts: 2 }
+    );
+  } catch {
+    return null;
+  }
 }
 
 export function normalizeLicitacion(raw: unknown): NormalizedProcess {

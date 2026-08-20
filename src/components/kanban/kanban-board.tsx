@@ -120,19 +120,29 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      try {
-        const res = await fetch("/api/kanban/refresh-statuses", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ limit: 20, all: true }),
-        });
-        if (!res.ok || cancelled) return;
-        const data = (await res.json()) as { refreshed?: number };
-        if (!cancelled) {
-          await reloadBoard(q);
+      let offset = 0;
+      let totalRefreshed = 0;
+      while (!cancelled) {
+        try {
+          const res = await fetch("/api/kanban/refresh-statuses", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ limit: 4, all: true, offset }),
+          });
+          if (!res.ok || cancelled) break;
+          const data = (await res.json()) as {
+            refreshed?: number;
+            hasMore?: boolean;
+          };
+          totalRefreshed += data.refreshed ?? 0;
+          if (!data.hasMore || cancelled) break;
+          offset += 4;
+        } catch {
+          break;
         }
-      } catch {
-        /* refresh en segundo plano */
+      }
+      if (!cancelled && totalRefreshed > 0) {
+        await reloadBoard(q);
       }
     })();
     return () => {
@@ -154,29 +164,49 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
     setRefreshingStatuses(true);
     setMessage(null);
     try {
-      const res = await fetch("/api/kanban/refresh-statuses", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ limit: 40, all: true }),
-      });
-      const data = (await res.json()) as {
-        ok?: boolean;
-        error?: string;
-        refreshed?: number;
-        notFound?: number;
-        errors?: string[];
-      };
-      if (!res.ok || !data.ok) throw new Error(data.error ?? "No se pudo actualizar");
+      let offset = 0;
+      let totalRefreshed = 0;
+      const allErrors: string[] = [];
+      let total = 0;
+
+      while (true) {
+        setMessage(
+          total > 0
+            ? `Actualizando estados MP… ${Math.min(offset, total)}/${total}`
+            : "Actualizando estados MP…"
+        );
+        const res = await fetch("/api/kanban/refresh-statuses", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ limit: 4, all: true, offset }),
+        });
+        const data = (await res.json()) as {
+          ok?: boolean;
+          error?: string;
+          refreshed?: number;
+          notFound?: number;
+          errors?: string[];
+          hasMore?: boolean;
+          total?: number;
+        };
+        if (!res.ok || !data.ok) throw new Error(data.error ?? "No se pudo actualizar");
+
+        totalRefreshed += data.refreshed ?? 0;
+        total = data.total ?? total;
+        if (data.errors?.length) allErrors.push(...data.errors);
+        if (!data.hasMore) break;
+        offset += 4;
+      }
 
       await reloadBoard();
-      if (data.errors?.length) {
+      if (allErrors.length) {
         setMessage(
-          `${data.refreshed ?? 0} actualizada${data.refreshed === 1 ? "" : "s"}. ${data.errors.length} error${data.errors.length === 1 ? "" : "es"} MP (ej. ${data.errors[0]}).`
+          `${totalRefreshed} actualizada${totalRefreshed === 1 ? "" : "s"}. ${allErrors.length} error${allErrors.length === 1 ? "" : "es"} MP (ej. ${allErrors[0]}).`
         );
       } else {
         setMessage(
-          data.refreshed && data.refreshed > 0
-            ? `${data.refreshed} tarjeta${data.refreshed !== 1 ? "s" : ""} actualizada${data.refreshed !== 1 ? "s" : ""} desde MP.`
+          totalRefreshed > 0
+            ? `${totalRefreshed} tarjeta${totalRefreshed !== 1 ? "s" : ""} actualizada${totalRefreshed !== 1 ? "s" : ""} desde MP.`
             : "Estados al día (sin cambios en MP)."
         );
       }
