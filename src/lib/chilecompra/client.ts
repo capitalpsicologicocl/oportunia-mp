@@ -284,6 +284,8 @@ function extractEstadoCodigo(item: Record<string, unknown>): string | null {
   const estado = item.estado ?? item.Estado;
   if (typeof estado === "string") {
     const trimmed = estado.trim().toLowerCase();
+    if (/proveedor seleccionado/.test(trimmed)) return "proveedor_seleccionado";
+    if (/oc emitida/.test(trimmed)) return "oc_emitida";
     if (/^(publicada|cerrada|desierta|cancelada|proveedor_seleccionado|oc_emitida)$/.test(trimmed)) {
       return trimmed;
     }
@@ -292,6 +294,8 @@ function extractEstadoCodigo(item: Record<string, unknown>): string | null {
     const nested = estado as Record<string, unknown>;
     return pickString(nested.codigo, nested.Codigo)?.trim().toLowerCase() ?? null;
   }
+  const idEstado = item.id_estado ?? item.idEstado;
+  if (typeof idEstado === "number" && idEstado === 4) return "proveedor_seleccionado";
   return null;
 }
 

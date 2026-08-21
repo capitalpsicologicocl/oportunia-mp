@@ -118,15 +118,51 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
   }, [initialCardId, cards]);
 
   useEffect(() => {
+    const cardId = selectedCard?.id;
+    const codigo = selectedCard?.process?.codigo_externo;
+    if (!cardId || !codigo) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const refreshRes = await fetch("/api/processes/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          body: JSON.stringify({ codigo }),
+        });
+        if (!refreshRes.ok || cancelled) return;
+
+        const params = new URLSearchParams();
+        if (q.trim()) params.set("q", q.trim());
+        const boardRes = await fetch(`/api/kanban?${params.toString()}`, { cache: "no-store" });
+        const data = (await boardRes.json()) as KanbanBoardData & { ok?: boolean };
+        if (!boardRes.ok || !data.ok || cancelled) return;
+
+        setCards(data.cards);
+        setGrouped(groupByColumn(data.cards));
+        const updated = data.cards.find((c) => c.id === cardId);
+        if (updated) setSelectedCard(updated);
+      } catch {
+        // El refresh en background no debe bloquear el panel.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCard?.id, selectedCard?.process?.codigo_externo, q]);
+
+  useEffect(() => {
     let cancelled = false;
     void (async () => {
       let offset = 0;
-      let totalRefreshed = 0;
       while (!cancelled) {
         try {
           const res = await fetch("/api/kanban/refresh-statuses", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            cache: "no-store",
             body: JSON.stringify({ limit: 4, all: true, offset }),
           });
           if (!res.ok || cancelled) break;
@@ -134,14 +170,13 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
             refreshed?: number;
             hasMore?: boolean;
           };
-          totalRefreshed += data.refreshed ?? 0;
           if (!data.hasMore || cancelled) break;
           offset += 4;
         } catch {
           break;
         }
       }
-      if (!cancelled && totalRefreshed > 0) {
+      if (!cancelled) {
         await reloadBoard(q);
       }
     })();
@@ -178,6 +213,7 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
         const res = await fetch("/api/kanban/refresh-statuses", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          cache: "no-store",
           body: JSON.stringify({ limit: 4, all: true, offset }),
         });
         const data = (await res.json()) as {
@@ -223,7 +259,7 @@ export function KanbanBoard({ initialData, initialQ = "", initialCardId }: Kanba
     try {
       const params = new URLSearchParams();
       if (nextQ.trim()) params.set("q", nextQ.trim());
-      const res = await fetch(`/api/kanban?${params.toString()}`);
+      const res = await fetch(`/api/kanban?${params.toString()}`, { cache: "no-store" });
       const data = (await res.json()) as KanbanBoardData & { ok?: boolean; error?: string };
       if (!res.ok || data.error) throw new Error(data.error ?? "Error al cargar");
       setCards(data.cards);

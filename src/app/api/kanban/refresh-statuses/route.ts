@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
       all: body.all === true,
       offset: body.offset ?? 0,
     });
-    return NextResponse.json({ ok: true, ...summary });
+    return NextResponse.json({ ok: true, ...summary }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Error desconocido";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

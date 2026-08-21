@@ -1476,9 +1476,10 @@ export async function refreshProcessByCodigo(
     const raw = await fetchLicitacionByCodigo(ticket, codigo);
     return raw ? normalizeLicitacion(raw) : null;
   }
-  const raw = await fetchCompraAgilByCodigo(ticket, codigo, {
-    listOnly: options?.listOnly ?? true,
-  });
+  let raw = await fetchCompraAgilByCodigo(ticket, codigo, { listOnly: true });
+  if (!raw) {
+    raw = await fetchCompraAgilByCodigo(ticket, codigo, { listOnly: false });
+  }
   return raw ? normalizeCompraAgil(raw) : null;
 }
 
@@ -1545,7 +1546,7 @@ async function refreshProcessRowsInParallel(
         options.ticket,
         row.codigo_externo,
         row.tipo,
-        { listOnly: row.tipo === "compra_agil" }
+        { listOnly: false }
       );
       if (!normalized) {
         notFound += 1;
@@ -1892,6 +1893,14 @@ export async function refreshKanbanPipelineProcesses(
   }
 
   const sorted = pipelineRows.sort((a, b) => {
+    const aStaleClosed =
+      /cerrad/i.test(a.estado ?? "") &&
+      !/proveedor seleccionado|proveedor_seleccionado|adjudicad/i.test(a.estado ?? "");
+    const bStaleClosed =
+      /cerrad/i.test(b.estado ?? "") &&
+      !/proveedor seleccionado|proveedor_seleccionado|adjudicad/i.test(b.estado ?? "");
+    if (aStaleClosed !== bStaleClosed) return aStaleClosed ? -1 : 1;
+
     const aPast = isPastCierre(a.fecha_cierre, a.hora_cierre) ? 0 : 1;
     const bPast = isPastCierre(b.fecha_cierre, b.hora_cierre) ? 0 : 1;
     if (aPast !== bPast) return aPast - bPast;
@@ -1921,7 +1930,7 @@ export async function refreshKanbanPipelineProcesses(
     supabase,
     orgRut,
     notifyFilters,
-    upsertOptions: { markDashboardSync: true },
+    upsertOptions: { markDashboardSync: true, forceRefresh: true },
   });
 
   return {

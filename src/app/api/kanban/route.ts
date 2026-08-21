@@ -7,7 +7,7 @@ export async function GET(request: NextRequest) {
   try {
     const q = request.nextUrl.searchParams.get("q") ?? undefined;
     const board = await getKanbanBoard({ q });
-    return NextResponse.json({ ok: true, ...board });
+    return NextResponse.json({ ok: true, ...board }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Error desconocido";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
