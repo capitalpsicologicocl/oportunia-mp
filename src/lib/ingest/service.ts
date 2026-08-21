@@ -120,6 +120,8 @@ function passesCaDiscoverFilter(
     nombre: process.nombre,
     servicios_requeridos: process.servicios_requeridos,
     descripcion: process.descripcion,
+    organismo_nombre: process.organismo_nombre,
+    unidad_compra: process.unidad_compra,
   });
   if (isExcluded(fullText)) return false;
   return matchesOrgContentFilters(
@@ -405,6 +407,10 @@ async function upsertProcess(
       : (existing?.synced_via_dashboard ?? false),
   };
 
+  if (options?.forceRefresh) {
+    row.dashboard_archived_at = null;
+  }
+
   const { data, error } = await supabase
     .from("processes")
     .upsert(row, { onConflict: "organization_id,codigo_externo" })
@@ -654,7 +660,6 @@ interface MpSyncPending {
   ca_publicado_desde?: string;
   ca_recent_scanned?: boolean;
   ca_keywords_skipped?: boolean;
-  ca_fast_manual?: boolean;
   cron_run?: boolean;
   candidates_prioritized?: boolean;
   finalized?: boolean;
@@ -871,6 +876,8 @@ async function appendCompraAgilCandidates(
     pending.ca_publicado_desde ?? compraAgilPublicadoDesdeIso(lastSyncAt, discoverMode);
   pending.ca_publicado_desde = publicadoDesde;
   const keywordPublicadoDesde = caKeywordSearchPublicadoDesdeIso();
+  /** Listado reciente: siempre ventana 72 h (keywords y listado alineados). */
+  const listingPublicadoDesde = keywordPublicadoDesde;
   const mpFast = { maxAttempts: 2 as const };
   const caEstados = "publicada,cerrada,proveedor_seleccionado,desierta,cancelada";
 
@@ -883,11 +890,6 @@ async function appendCompraAgilCandidates(
       notifyFilters.rubros
     );
     pending.ca_term_offset = pending.ca_term_offset ?? 0;
-  }
-
-  if (pending.ca_fast_manual && !pending.ca_keywords_skipped) {
-    pending.ca_keywords_skipped = true;
-    pending.ca_term_offset = pending.ca_search_terms.length;
   }
 
   const terms = pending.ca_search_terms;
@@ -923,10 +925,6 @@ async function appendCompraAgilCandidates(
     }
 
     pending.ca_term_offset = offset + keywordBatchSize;
-    if (pending.cron_run && (pending.ca_term_offset ?? 0) >= 16) {
-      pending.ca_term_offset = terms.length;
-      pending.ca_keywords_skipped = true;
-    }
   } else if (pending.ca_keywords_skipped && offset < terms.length) {
     pending.ca_term_offset = terms.length;
   }
@@ -941,8 +939,13 @@ async function appendCompraAgilCandidates(
     const deferListing = options?.perRequest && ranKeywordBatch;
     if (!deferListing) {
       try {
-        const maxPages = pending.cron_run ? 4 : options?.perRequest ? 1 : 3;
-        const rawItems = await fetchCompraAgilPublishedSince(ticket, publicadoDesde, maxPages);
+        const maxPages = pending.cron_run ? 4 : options?.perRequest ? 2 : 3;
+        const rawItems = await fetchCompraAgilPublishedSince(
+          ticket,
+          listingPublicadoDesde,
+          maxPages,
+          { maxAttempts: 2, estado: caEstados }
+        );
         const normalizedList = rawItems.map((raw) => normalizeCompraAgil(raw));
         await upsertDiscoveredCaBatch(
           supabase,
@@ -1034,7 +1037,7 @@ function isRecentScopeSync(lastSyncAt: string | null): boolean {
 
 async function initCaSyncPending(
   supabase: ReturnType<typeof createServiceClient>,
-  options?: { cron?: boolean; fastManual?: boolean }
+  options?: { cron?: boolean }
 ): Promise<MpSyncPending> {
   const lastSyncAt = await getLastMpSyncAt(supabase, "compra_agil");
   const light = isRecentScopeSync(lastSyncAt) && !options?.cron;
@@ -1043,7 +1046,6 @@ async function initCaSyncPending(
     : options?.cron
       ? "nightly"
       : "incremental";
-  const fastManual = Boolean(options?.fastManual && lastSyncAt && !options?.cron);
 
   return {
     candidates: [],
@@ -1059,8 +1061,7 @@ async function initCaSyncPending(
     ca_discover_mode: discoverMode,
     ca_publicado_desde: compraAgilPublicadoDesdeIso(lastSyncAt, discoverMode),
     cron_run: options?.cron ?? false,
-    ca_keywords_skipped: fastManual,
-    ca_fast_manual: fastManual,
+    ca_keywords_skipped: false,
     light,
   };
 }
@@ -1141,7 +1142,7 @@ export async function runDashboardSyncBatch(
       await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }));
     }
     if (scope === "compra_agil") {
-      pending = await initCaSyncPending(supabase, { cron, fastManual: !cron });
+      pending = await initCaSyncPending(supabase, { cron });
     } else {
       const lastSyncAt = await getLastMpSyncAt(supabase, "licitacion");
       const discoverErrors: string[] = [];
@@ -1483,7 +1484,16 @@ export async function refreshProcessByCodigo(
 
 /** Refresca un proceso desde la API de ChileCompra y lo guarda en la base. */
 export async function refreshProcessInDb(
-  codigo: string
+  codigo: string,
+  options?: { force?: boolean }
+): Promise<"updated" | "not_found"> {
+  return importProcessByCodigo(codigo, options);
+}
+
+/** Importa una CA/Licitación por código exacto (sin filtro de contenido). */
+export async function importProcessByCodigo(
+  codigo: string,
+  options?: { force?: boolean }
 ): Promise<"updated" | "not_found"> {
   const { supabase, orgRut, ticket } = await getOrgContext();
   if (!ticket) {
@@ -1499,12 +1509,16 @@ export async function refreshProcessInDb(
     .maybeSingle();
 
   const tipo: ProcessTipo = existing?.tipo ?? inferProcessTipo(trimmed);
-  const normalized = await refreshProcessByCodigo(ticket, trimmed, tipo);
+  let normalized = await refreshProcessByCodigo(ticket, trimmed, tipo, { listOnly: true });
+  if (!normalized) {
+    normalized = await refreshProcessByCodigo(ticket, trimmed, tipo, { listOnly: false });
+  }
   if (!normalized) return "not_found";
 
   await upsertProcess(supabase, normalized, orgRut, {
     notifyFilters: await loadOrgContentFilters(),
     markDashboardSync: true,
+    forceRefresh: options?.force ?? true,
   });
   return "updated";
 }
@@ -1921,30 +1935,7 @@ export async function refreshKanbanPipelineProcesses(
 
 export async function maybeRefreshSearchProcess(q?: string): Promise<void> {
   if (!q || !looksLikeProcessCodigo(q)) return;
-
-  const trimmed = q.trim();
-  const supabase = createServiceClient();
-  const { data: existing } = await supabase
-    .from("processes")
-    .select("estado, adjudicado_a_mi, last_synced_at")
-    .eq("organization_id", DEFAULT_ORG_ID)
-    .eq("codigo_externo", trimmed)
-    .maybeSingle();
-
-  if (existing) {
-    const recentlySynced =
-      existing.last_synced_at &&
-      Date.now() - new Date(existing.last_synced_at).getTime() < 15 * 60 * 1000;
-
-    if (recentlySynced) return;
-
-    const staleEstado = estadoLooksStale(existing.estado);
-    const missingAdjudicacionFlag = !existing.adjudicado_a_mi && !staleEstado;
-
-    if (!staleEstado && !missingAdjudicacionFlag) return;
-  }
-
-  await refreshProcessInDb(trimmed).catch(() => undefined);
+  await importProcessByCodigo(q.trim(), { force: true }).catch(() => undefined);
 }
 
 export async function runIngestion(): Promise<IngestSummary> {

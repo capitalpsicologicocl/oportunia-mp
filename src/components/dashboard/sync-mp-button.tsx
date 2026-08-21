@@ -143,14 +143,14 @@ export function SyncMercadoPublicoButton({
     setProgress(
       isFirstSync
         ? "Sincronización inicial (varias rondas cortas, ~2–4 min)…"
-        : "Actualizando dashboard (rondas de ~30 s; listado MP + novedades recientes)…"
+        : "Actualizando dashboard (keywords + novedades 72 h, ~30 s por ronda)…"
     );
     startSessionKeepAlive();
 
     try {
       let continueBatch = false;
       let rounds = 0;
-      const maxRounds = 40;
+      const maxRounds = 60;
       let timeoutRetries = 0;
       const maxTimeoutRetries = 4;
       let lastData: SyncApiResponse | null = null;
@@ -322,7 +322,7 @@ export function SyncMercadoPublicoButton({
       {!isFirstSync && !loading && (
         <p className="text-xs text-muted-foreground">
           {isCa
-            ? "Sync rápida: novedades recientes de MP (~1 min). El cron nocturno escanea todas las keywords."
+            ? "Sync: busca por tus keywords/rubros (72 h) + listado reciente. Varias rondas (~3 min total)."
             : "Sync en servidor: busca licitaciones recientes (~1–2 min). Cron nocturno 00:01."}
         </p>
       )}

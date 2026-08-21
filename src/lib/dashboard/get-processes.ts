@@ -323,7 +323,17 @@ export async function getDashboardProcesses(
     rows = rows.filter((r) => matchesCrmFilter(r.en_crm, r.crm_columna, filters.crm!));
   }
 
-  rows = rows.filter((row) => !isExcluded(buildSearchText(row)));
+  rows = rows.filter((row) => {
+    const qTrimmed = filters.q?.trim() ?? "";
+    if (
+      qTrimmed.length > 0 &&
+      looksLikeProcessCodigo(qTrimmed) &&
+      row.codigo_externo.toLowerCase() === qTrimmed.toLowerCase()
+    ) {
+      return true;
+    }
+    return !isExcluded(buildSearchText(row));
+  });
 
   if (filtro !== "todos") {
     const qTrimmed = filters.q?.trim() ?? "";

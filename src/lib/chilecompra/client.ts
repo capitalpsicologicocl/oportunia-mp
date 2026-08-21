@@ -497,7 +497,8 @@ export async function fetchCompraAgilByQuery(
 export async function fetchCompraAgilPublishedSince(
   ticket: string,
   publicadoDesdeIso: string,
-  maxPages = 6
+  maxPages = 6,
+  options?: { maxAttempts?: number; estado?: string }
 ): Promise<unknown[]> {
   const items: unknown[] = [];
   let page = 1;
@@ -505,11 +506,19 @@ export async function fetchCompraAgilPublishedSince(
 
   while (page <= totalPages && page <= maxPages) {
     try {
-      const data = await fetchApi2<CompraAgilListResponse>("/v2/compra-agil", ticket, {
+      const params: Record<string, string | number> = {
         publicado_desde: publicadoDesdeIso,
         tamano_pagina: 50,
         numero_pagina: page,
-      });
+      };
+      if (options?.estado) params.estado = options.estado;
+
+      const data = await fetchApi2<CompraAgilListResponse>(
+        "/v2/compra-agil",
+        ticket,
+        params,
+        { maxAttempts: options?.maxAttempts }
+      );
       const pageItems = data?.items ?? data?.Items ?? [];
       if (pageItems.length === 0 && page === 1) {
         break;

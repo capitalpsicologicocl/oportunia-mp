@@ -12,12 +12,18 @@ export interface OrgContentFilters {
 
 export function buildProcessSearchText(
   row: Pick<
-    { nombre: string | null; servicios_requeridos: string | null; descripcion?: string | null },
-    "nombre" | "servicios_requeridos" | "descripcion"
+    {
+      nombre: string | null;
+      servicios_requeridos: string | null;
+      descripcion?: string | null;
+      organismo_nombre?: string | null;
+      unidad_compra?: string | null;
+    },
+    "nombre" | "servicios_requeridos" | "descripcion" | "organismo_nombre" | "unidad_compra"
   >
 ): string {
   return normalizeMatchText(
-    `${row.nombre ?? ""} ${row.servicios_requeridos ?? ""} ${row.descripcion ?? ""}`
+    `${row.nombre ?? ""} ${row.servicios_requeridos ?? ""} ${row.descripcion ?? ""} ${row.organismo_nombre ?? ""} ${row.unidad_compra ?? ""}`
   );
 }
 
