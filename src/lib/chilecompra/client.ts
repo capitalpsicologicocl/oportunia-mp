@@ -502,13 +502,15 @@ export async function fetchCompraAgilPublishedSince(
   ticket: string,
   publicadoDesdeIso: string,
   maxPages = 6,
-  options?: { maxAttempts?: number; estado?: string }
+  options?: { maxAttempts?: number; estado?: string; startPage?: number }
 ): Promise<unknown[]> {
   const items: unknown[] = [];
-  let page = 1;
+  const startPage = Math.max(1, options?.startPage ?? 1);
+  const endPage = startPage + Math.max(1, maxPages) - 1;
+  let page = startPage;
   let totalPages = 1;
 
-  while (page <= totalPages && page <= maxPages) {
+  while (page <= totalPages && page <= endPage) {
     try {
       const params: Record<string, string | number> = {
         publicado_desde: publicadoDesdeIso,
@@ -524,7 +526,7 @@ export async function fetchCompraAgilPublishedSince(
         { maxAttempts: options?.maxAttempts }
       );
       const pageItems = data?.items ?? data?.Items ?? [];
-      if (pageItems.length === 0 && page === 1) {
+      if (pageItems.length === 0 && page === startPage) {
         break;
       }
       items.push(...pageItems);
