@@ -497,18 +497,27 @@ export async function fetchCompraAgilByQuery(
   return items;
 }
 
+export type CompraAgilPublishedSinceResult = {
+  items: unknown[];
+  totalPages: number;
+  lastPageFetched: number;
+  apiError?: string;
+};
+
 /** Listado reciente sin keyword (si la API lo permite). */
 export async function fetchCompraAgilPublishedSince(
   ticket: string,
   publicadoDesdeIso: string,
   maxPages = 6,
   options?: { maxAttempts?: number; estado?: string; startPage?: number }
-): Promise<unknown[]> {
+): Promise<CompraAgilPublishedSinceResult> {
   const items: unknown[] = [];
   const startPage = Math.max(1, options?.startPage ?? 1);
   const endPage = startPage + Math.max(1, maxPages) - 1;
   let page = startPage;
   let totalPages = 1;
+  let lastPageFetched = startPage - 1;
+  let apiError: string | undefined;
 
   while (page <= totalPages && page <= endPage) {
     try {
@@ -516,6 +525,7 @@ export async function fetchCompraAgilPublishedSince(
         publicado_desde: publicadoDesdeIso,
         tamano_pagina: 50,
         numero_pagina: page,
+        ordenar_por: "FechaPublicacion",
       };
       if (options?.estado) params.estado = options.estado;
 
@@ -526,20 +536,22 @@ export async function fetchCompraAgilPublishedSince(
         { maxAttempts: options?.maxAttempts }
       );
       const pageItems = data?.items ?? data?.Items ?? [];
+      totalPages = Math.max(1, data?.paginacion?.total_paginas ?? 1);
+      lastPageFetched = page;
       if (pageItems.length === 0 && page === startPage) {
         break;
       }
       items.push(...pageItems);
-      totalPages = Math.max(1, data?.paginacion?.total_paginas ?? 1);
       if (pageItems.length === 0) break;
       page += 1;
       await sleepMs(MP_COMPRA_AGIL_TERM_DELAY_MS);
-    } catch {
+    } catch (err) {
+      apiError = err instanceof Error ? err.message : "Error listado CA";
       break;
     }
   }
 
-  return items;
+  return { items, totalPages, lastPageFetched, apiError };
 }
 
 export async function fetchCompraAgilForTerms(
@@ -608,7 +620,7 @@ export async function fetchCompraAgilRange(ticket: string, desdeIso: string, has
 async function fetchCompraAgilListItemByCodigo(
   ticket: string,
   codigo: string,
-  maxPages = 1,
+  maxPages = 2,
   maxAttempts = 2
 ): Promise<Record<string, unknown> | null> {
   const trimmed = codigo.trim();

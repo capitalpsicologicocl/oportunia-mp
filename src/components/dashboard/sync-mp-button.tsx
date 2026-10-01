@@ -33,6 +33,7 @@ export function SyncMercadoPublicoButton({
   lastCronError: lastCronErrorProp,
   lastCronSummaryPartial: lastCronSummaryPartialProp,
   lastCronSummaryText: lastCronSummaryTextProp,
+  pendingQueueLabel: pendingQueueLabelProp,
 }: {
   scope: Exclude<SyncScope, "all">;
   isFirstSync?: boolean;
@@ -43,6 +44,7 @@ export function SyncMercadoPublicoButton({
   lastCronError?: string | null;
   lastCronSummaryPartial?: boolean | null;
   lastCronSummaryText?: string | null;
+  pendingQueueLabel?: string | null;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -59,6 +61,7 @@ export function SyncMercadoPublicoButton({
     lastCronError: null as string | null,
     lastCronSummaryPartial: null as boolean | null,
     lastCronSummaryText: null as string | null,
+    pendingQueueLabel: null as string | null,
   });
 
   useEffect(() => {
@@ -82,6 +85,7 @@ export function SyncMercadoPublicoButton({
           lastCronError?: string | null;
           lastCronSummaryPartial?: boolean | null;
           lastCronSummaryText?: string | null;
+          pendingQueueLabel?: string | null;
         }) => {
           setSyncMeta({
             isFirstSync: data.isFirstSync ?? true,
@@ -92,6 +96,7 @@ export function SyncMercadoPublicoButton({
             lastCronError: data.lastCronError ?? null,
             lastCronSummaryPartial: data.lastCronSummaryPartial ?? null,
             lastCronSummaryText: data.lastCronSummaryText ?? null,
+            pendingQueueLabel: data.pendingQueueLabel ?? null,
           });
         }
       )
@@ -121,6 +126,7 @@ export function SyncMercadoPublicoButton({
   const lastCronSummaryPartial =
     lastCronSummaryPartialProp ?? syncMeta.lastCronSummaryPartial;
   const lastCronSummaryText = lastCronSummaryTextProp ?? syncMeta.lastCronSummaryText;
+  const pendingQueueLabel = pendingQueueLabelProp ?? syncMeta.pendingQueueLabel;
 
   function startSessionKeepAlive() {
     if (sessionKeepAlive.current) clearInterval(sessionKeepAlive.current);
@@ -296,7 +302,7 @@ export function SyncMercadoPublicoButton({
             <strong className="text-foreground">{lastManualSyncLabel}</strong>
           </p>
           <p>
-            Última sync automática (00:01):{" "}
+            Última sync automática (cron ~01:00 CL):{" "}
             <strong className="text-foreground">{lastCronSyncLabel}</strong>
             {lastCronSummaryPartial && lastCronSyncLabel !== "Nunca" && (
               <span className="text-amber-700"> · parcial</span>
@@ -304,6 +310,9 @@ export function SyncMercadoPublicoButton({
           </p>
           {lastCronSummaryText && (
             <p className="text-[10px] text-muted-foreground">Último cron: {lastCronSummaryText}</p>
+          )}
+          {pendingQueueLabel && (
+            <p className="text-[10px] text-amber-800">Cola pendiente: {pendingQueueLabel}</p>
           )}
           {lastCronSyncLabel === "Nunca" && lastCronAttemptLabel !== "Nunca" && (
             <p className="text-[10px] text-amber-800">
@@ -323,7 +332,7 @@ export function SyncMercadoPublicoButton({
         <p className="text-xs text-muted-foreground">
           {isCa
             ? "Sync: busca por tus keywords/rubros (72 h) + listado reciente. Varias rondas (~3 min total)."
-            : "Sync en servidor: busca licitaciones recientes (~1–2 min). Cron nocturno 00:01."}
+            : "Sync en servidor: busca licitaciones recientes (~1–2 min). Cron nocturno ~01:00 CL."}
         </p>
       )}
       {result && (

@@ -1,5 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { isExcluded, keywordMatchesInText, normalizeMatchText } from "@/lib/dashboard/content-match";
+import { buildProcessSearchText } from "@/lib/dashboard/process-relevance";
 import { looksLikeProcessCodigo } from "@/lib/dashboard/process-codigo";
 import { matchesRubrosUnspsc } from "@/lib/dashboard/unspsc-match";
 import { processMatchesRegion, processRegionCodes } from "@/lib/dashboard/ubicacion-display";
@@ -51,6 +52,8 @@ export interface ProcessRow {
   hora_cierre: string | null;
   url_publica: string | null;
   servicios_requeridos: string | null;
+  descripcion?: string | null;
+  unidad_compra?: string | null;
   rubros_unspsc: string[] | null;
   adjudicado_a_mi: boolean;
   postulabilidad: Postulabilidad | null;
@@ -116,11 +119,18 @@ function escapeIlike(value: string): string {
 }
 
 function buildSearchText(
-  row: Pick<ProcessRow, "nombre" | "servicios_requeridos"> & { descripcion?: string | null }
+  row: Pick<
+    ProcessRow,
+    "nombre" | "servicios_requeridos" | "organismo_nombre"
+  > & { descripcion?: string | null; unidad_compra?: string | null }
 ): string {
-  return normalizeMatchText(
-    `${row.nombre ?? ""} ${row.servicios_requeridos ?? ""} ${row.descripcion ?? ""}`
-  );
+  return buildProcessSearchText({
+    nombre: row.nombre,
+    servicios_requeridos: row.servicios_requeridos,
+    descripcion: row.descripcion,
+    organismo_nombre: row.organismo_nombre,
+    unidad_compra: row.unidad_compra,
+  });
 }
 
 function matchesKeywords(text: string, keywords: string[]): boolean {
@@ -217,6 +227,8 @@ export async function getDashboardProcesses(
       hora_cierre,
       url_publica,
       servicios_requeridos,
+      descripcion,
+      unidad_compra,
       rubros_unspsc,
       adjudicado_a_mi,
       estado_revision,
@@ -266,6 +278,8 @@ export async function getDashboardProcesses(
     hora_cierre: row.hora_cierre,
     url_publica: row.url_publica,
     servicios_requeridos: row.servicios_requeridos,
+    descripcion: (row.descripcion as string | null) ?? null,
+    unidad_compra: (row.unidad_compra as string | null) ?? null,
     rubros_unspsc: (row.rubros_unspsc as string[] | null) ?? null,
     adjudicado_a_mi: row.adjudicado_a_mi,
     postulabilidad: null,

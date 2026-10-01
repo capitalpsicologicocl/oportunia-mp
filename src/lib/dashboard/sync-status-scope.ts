@@ -13,6 +13,7 @@ export async function getMpSyncStatusForScope(
   lastCronError: string | null;
   lastCronSummaryPartial: boolean | null;
   lastCronSummaryText: string | null;
+  pendingQueueLabel: string | null;
   hasSyncedData: boolean;
   isFirstSync: boolean;
   lastSyncLabel: string;
@@ -25,13 +26,14 @@ export async function getMpSyncStatusForScope(
   const manualCol =
     scope === "compra_agil" ? "last_mp_sync_ca_manual_at" : "last_mp_sync_lic_manual_at";
   const cronCol = scope === "compra_agil" ? "last_mp_sync_ca_cron_at" : "last_mp_sync_lic_cron_at";
+  const pendingCol = scope === "compra_agil" ? "mp_sync_pending_ca" : "mp_sync_pending_lic";
   const tipo = scope === "compra_agil" ? "compra_agil" : "licitacion";
 
   const [{ data: settings }, { count }] = await Promise.all([
     supabase
       .from("org_settings")
       .select(
-        `${lastCol}, ${manualCol}, ${cronCol}, last_mp_sync_at, last_cron_attempt_at, last_cron_error, last_cron_summary`
+        `${lastCol}, ${manualCol}, ${cronCol}, last_mp_sync_at, last_cron_attempt_at, last_cron_error, last_cron_summary, ${pendingCol}`
       )
       .eq("organization_id", DEFAULT_ORG_ID)
       .single(),
@@ -70,6 +72,33 @@ export async function getMpSyncStatusForScope(
         ? "parcial (cola pendiente)"
         : null;
 
+  const pendingRaw = row?.[pendingCol] as
+    | {
+        ca_fetched?: boolean;
+        ca_term_offset?: number;
+        ca_search_terms?: string[];
+        ca_list_page?: number;
+        index?: number;
+        candidates?: unknown[];
+        finalized?: boolean;
+      }
+    | null
+    | undefined;
+
+  let pendingQueueLabel: string | null = null;
+  if (pendingRaw && !pendingRaw.finalized) {
+    if (scope === "compra_agil" && pendingRaw.ca_fetched === false) {
+      const terms = pendingRaw.ca_search_terms?.length ?? 0;
+      const offset = pendingRaw.ca_term_offset ?? 0;
+      const listPage = pendingRaw.ca_list_page ?? 1;
+      pendingQueueLabel = `CA: keywords ${Math.min(offset, terms)}/${terms}, listado pág. ${listPage}`;
+    } else {
+      const total = pendingRaw.candidates?.length ?? 0;
+      const idx = pendingRaw.index ?? 0;
+      pendingQueueLabel = `Cola: ${idx}/${total} procesados`;
+    }
+  }
+
   return {
     lastSyncAt,
     lastManualSyncAt,
@@ -78,6 +107,7 @@ export async function getMpSyncStatusForScope(
     lastCronError,
     lastCronSummaryPartial,
     lastCronSummaryText,
+    pendingQueueLabel,
     hasSyncedData: (count ?? 0) > 0,
     isFirstSync: !lastSyncAt,
     lastSyncLabel: formatLastSyncCL(lastSyncAt),
