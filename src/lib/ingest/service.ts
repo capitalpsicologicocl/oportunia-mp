@@ -234,7 +234,9 @@ async function touchCronSyncTimestamp(scope: Exclude<SyncScope, "all">): Promise
 const CRON_LIC_ENRICH_PER_RUN = 60;
 const CRON_CA_KEYWORDS_PER_BATCH = 8;
 /** Páginas de listado (50 ítems) por corrida de cron, aunque falten keywords. */
-const CRON_CA_LISTING_PAGES_PER_RUN = 6;
+const CRON_CA_LISTING_PAGES_PER_RUN = 8;
+/** Lotes de keywords por llamada a append (evita que keywords consuman todo el timeout). */
+const CRON_CA_KEYWORD_BATCHES_PER_CALL = 1;
 /** Tope acumulado de páginas de listado por ciclo nocturno (se reinicia al finalizar CA). */
 const CRON_CA_LISTING_MAX_PAGE = 30;
 
@@ -926,9 +928,57 @@ async function appendCompraAgilCandidates(
     pending.ca_keywords_skipped = false;
   }
 
+  const runCronListingSlice = async (): Promise<void> => {
+    if (!pending.cron_run || outOfTime() || pending.ca_recent_scanned) return;
+    const startPage = pending.ca_list_page ?? 1;
+    if (startPage > CRON_CA_LISTING_MAX_PAGE) {
+      if ((pending.ca_term_offset ?? 0) >= terms.length) {
+        pending.ca_recent_scanned = true;
+      }
+      return;
+    }
+    const listing = await fetchCompraAgilPublishedSince(
+      ticket,
+      listingPublicadoDesde,
+      CRON_CA_LISTING_PAGES_PER_RUN,
+      { maxAttempts: 2, estado: caEstados, startPage }
+    );
+    if (listing.apiError) {
+      onError(`Compra ágil (listado reciente): ${listing.apiError}`);
+      return;
+    }
+    pending.ca_listing_total_pages = listing.totalPages;
+    const normalizedList = listing.items.map((raw) => normalizeCompraAgil(raw));
+    await upsertDiscoveredCaBatch(
+      supabase,
+      orgRut ?? null,
+      notifyFilters,
+      pending,
+      normalizedList,
+      seen
+    );
+    pending.ca_list_page = startPage + CRON_CA_LISTING_PAGES_PER_RUN;
+    const keywordsDoneNow = (pending.ca_term_offset ?? 0) >= terms.length;
+    const listingExhausted =
+      listing.lastPageFetched >= listing.totalPages ||
+      (pending.ca_list_page ?? 1) > CRON_CA_LISTING_MAX_PAGE;
+    if (keywordsDoneNow && listingExhausted) {
+      pending.ca_recent_scanned = true;
+    }
+  };
+
+  if (pending.cron_run && !outOfTime() && !pending.ca_recent_scanned) {
+    try {
+      await runCronListingSlice();
+    } catch (err) {
+      onError(`Compra ágil (listado reciente): ${err instanceof Error ? err.message : "Error"}`);
+    }
+  }
+
   const multiKeywordBatch =
     !options?.perRequest && (pending.cron_run || options?.serverSide === true);
   let keywordOffset = offset;
+  let keywordBatchesThisCall = 0;
 
   if (!pending.ca_keywords_skipped && keywordOffset < terms.length && !outOfTime()) {
     try {
@@ -948,7 +998,13 @@ async function appendCompraAgilCandidates(
         await upsertDiscoveredCaBatch(supabase, orgRut ?? null, notifyFilters, pending, batch, seen);
         keywordOffset += keywordBatchSize;
         pending.ca_term_offset = keywordOffset;
-      } while (multiKeywordBatch && keywordOffset < terms.length && !outOfTime());
+        keywordBatchesThisCall += 1;
+      } while (
+        multiKeywordBatch &&
+        keywordOffset < terms.length &&
+        !outOfTime() &&
+        (!pending.cron_run || keywordBatchesThisCall < CRON_CA_KEYWORD_BATCHES_PER_CALL)
+      );
     } catch (err) {
       onError(`Compra ágil (keywords): ${err instanceof Error ? err.message : "Error"}`);
       pending.ca_term_offset = keywordOffset;
@@ -960,57 +1016,25 @@ async function appendCompraAgilCandidates(
   const ranKeywordBatch = !pending.ca_keywords_skipped && offset < terms.length;
   const keywordsDone = (pending.ca_term_offset ?? 0) >= terms.length;
 
-  const shouldRunListing =
+  const shouldRunManualListing =
+    !pending.cron_run &&
     !outOfTime() &&
     !pending.ca_recent_scanned &&
-    (pending.cron_run || (keywordsDone && !(options?.perRequest && ranKeywordBatch)));
+    keywordsDone &&
+    !(options?.perRequest && ranKeywordBatch);
 
-  if (shouldRunListing) {
+  if (shouldRunManualListing) {
     try {
-      if (pending.cron_run) {
-        const startPage = pending.ca_list_page ?? 1;
-        if (startPage <= CRON_CA_LISTING_MAX_PAGE) {
-          const listing = await fetchCompraAgilPublishedSince(
-            ticket,
-            listingPublicadoDesde,
-            CRON_CA_LISTING_PAGES_PER_RUN,
-            { maxAttempts: 2, estado: caEstados, startPage }
-          );
-          if (listing.apiError) {
-            onError(`Compra ágil (listado reciente): ${listing.apiError}`);
-          } else {
-            pending.ca_listing_total_pages = listing.totalPages;
-            const normalizedList = listing.items.map((raw) => normalizeCompraAgil(raw));
-            await upsertDiscoveredCaBatch(
-              supabase,
-              orgRut ?? null,
-              notifyFilters,
-              pending,
-              normalizedList,
-              seen
-            );
-            pending.ca_list_page = startPage + CRON_CA_LISTING_PAGES_PER_RUN;
-            const listingExhausted =
-              listing.lastPageFetched >= listing.totalPages ||
-              (pending.ca_list_page ?? 1) > CRON_CA_LISTING_MAX_PAGE;
-            if (keywordsDone && listingExhausted) {
-              pending.ca_recent_scanned = true;
-            }
-          }
-        } else if (keywordsDone) {
-          pending.ca_recent_scanned = true;
-        }
+      const maxPages = options?.perRequest ? 2 : 3;
+      const listing = await fetchCompraAgilPublishedSince(
+        ticket,
+        listingPublicadoDesde,
+        maxPages,
+        { maxAttempts: 2, estado: caEstados }
+      );
+      if (listing.apiError) {
+        onError(`Compra ágil (listado reciente): ${listing.apiError}`);
       } else {
-        const maxPages = options?.perRequest ? 2 : 3;
-        const listing = await fetchCompraAgilPublishedSince(
-          ticket,
-          listingPublicadoDesde,
-          maxPages,
-          { maxAttempts: 2, estado: caEstados }
-        );
-        if (listing.apiError) {
-          onError(`Compra ágil (listado reciente): ${listing.apiError}`);
-        }
         const normalizedList = listing.items.map((raw) => normalizeCompraAgil(raw));
         await upsertDiscoveredCaBatch(
           supabase,
@@ -1025,6 +1049,16 @@ async function appendCompraAgilCandidates(
     } catch (err) {
       onError(`Compra ágil (listado reciente): ${err instanceof Error ? err.message : "Error"}`);
     }
+  }
+
+  if (
+    keywordsDone &&
+    !pending.ca_recent_scanned &&
+    pending.ca_list_page &&
+    pending.ca_listing_total_pages &&
+    (pending.ca_list_page ?? 1) > pending.ca_listing_total_pages
+  ) {
+    pending.ca_recent_scanned = true;
   }
 
   if (isCaDiscoveryComplete(pending)) {
@@ -1394,12 +1428,16 @@ export async function runDashboardSyncCron(options?: {
     round += 1;
     if (scopeDone[scope]) continue;
 
+    const remainingMs = deadline - Date.now();
+    const batchMs = scope === "compra_agil" ? Math.min(150_000, remainingMs - 5_000) : Math.min(90_000, remainingMs - 5_000);
+    if (batchMs < 20_000) break;
+
     const result = await runDashboardSyncBatch({
       continueBatch: continueBatchByScope[scope],
       scope,
       cron: true,
       serverSide: true,
-      maxBatchMs: 120_000,
+      maxBatchMs: batchMs,
     });
     continueBatchByScope[scope] = true;
     scopesTouched.add(scope);
