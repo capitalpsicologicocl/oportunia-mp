@@ -149,7 +149,7 @@ export function SyncMercadoPublicoButton({
     setProgress(
       isFirstSync
         ? "Sincronización inicial (varias rondas cortas, ~2–4 min)…"
-        : "Actualizando dashboard (keywords + novedades 72 h, ~30 s por ronda)…"
+        : "Actualizando dashboard (listado reciente + keywords, ~1 min)…"
     );
     startSessionKeepAlive();
 
@@ -161,7 +161,9 @@ export function SyncMercadoPublicoButton({
       const maxTimeoutRetries = 4;
       let lastData: SyncApiResponse | null = null;
 
-      while (rounds < maxRounds) {
+      const maxRoundsForScope = scope === "compra_agil" ? 2 : maxRounds;
+
+      while (rounds < maxRoundsForScope) {
         rounds += 1;
         const res = await fetch("/api/ingest/sync", {
           method: "POST",
@@ -304,8 +306,8 @@ export function SyncMercadoPublicoButton({
           <p>
             Última sync automática (cron ~01:00 CL):{" "}
             <strong className="text-foreground">{lastCronSyncLabel}</strong>
-            {lastCronSummaryPartial && lastCronSyncLabel !== "Nunca" && (
-              <span className="text-amber-700"> · parcial</span>
+            {lastCronSummaryPartial === true && lastCronSyncLabel !== "Nunca" && (
+              <span className="text-amber-700"> · sin novedades</span>
             )}
           </p>
           {lastCronSummaryText && (
@@ -331,7 +333,7 @@ export function SyncMercadoPublicoButton({
       {!isFirstSync && !loading && (
         <p className="text-xs text-muted-foreground">
           {isCa
-            ? "Sync: busca por tus keywords/rubros (72 h) + listado reciente. Varias rondas (~3 min total)."
+            ? "Sync: listado MP 72 h + keywords (rotación continua). Un clic ≈ 1 min."
             : "Sync en servidor: busca licitaciones recientes (~1–2 min). Cron nocturno ~01:00 CL."}
         </p>
       )}

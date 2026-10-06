@@ -69,7 +69,7 @@ export async function getMpSyncStatusForScope(
     summaryParts.length > 0
       ? `${lastCronSummaryPartial ? "parcial · " : ""}${summaryParts.join(" · ")}`
       : lastCronSummaryPartial
-        ? "parcial (cola pendiente)"
+        ? "sin importaciones en la última corrida"
         : null;
 
   const pendingRaw = row?.[pendingCol] as
@@ -91,7 +91,7 @@ export async function getMpSyncStatusForScope(
       const terms = pendingRaw.ca_search_terms?.length ?? 0;
       const offset = pendingRaw.ca_term_offset ?? 0;
       const listPage = pendingRaw.ca_list_page ?? 1;
-      pendingQueueLabel = `CA: keywords ${Math.min(offset, terms)}/${terms}, listado pág. ${listPage}`;
+      pendingQueueLabel = `Rotación CA: keywords ${Math.min(offset, terms)}/${terms} · listado pág. ${listPage} (avance normal)`;
     } else {
       const total = pendingRaw.candidates?.length ?? 0;
       const idx = pendingRaw.index ?? 0;
