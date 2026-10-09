@@ -34,6 +34,8 @@ export function SyncMercadoPublicoButton({
   lastCronSummaryPartial: lastCronSummaryPartialProp,
   lastCronSummaryText: lastCronSummaryTextProp,
   pendingQueueLabel: pendingQueueLabelProp,
+  cronImportStale: cronImportStaleProp,
+  cronMpError: cronMpErrorProp,
 }: {
   scope: Exclude<SyncScope, "all">;
   isFirstSync?: boolean;
@@ -45,6 +47,8 @@ export function SyncMercadoPublicoButton({
   lastCronSummaryPartial?: boolean | null;
   lastCronSummaryText?: string | null;
   pendingQueueLabel?: string | null;
+  cronImportStale?: boolean;
+  cronMpError?: string | null;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -127,6 +131,8 @@ export function SyncMercadoPublicoButton({
     lastCronSummaryPartialProp ?? syncMeta.lastCronSummaryPartial;
   const lastCronSummaryText = lastCronSummaryTextProp ?? syncMeta.lastCronSummaryText;
   const pendingQueueLabel = pendingQueueLabelProp ?? syncMeta.pendingQueueLabel;
+  const cronImportStale = cronImportStaleProp ?? false;
+  const cronMpError = cronMpErrorProp ?? null;
 
   function startSessionKeepAlive() {
     if (sessionKeepAlive.current) clearInterval(sessionKeepAlive.current);
@@ -158,10 +164,10 @@ export function SyncMercadoPublicoButton({
       let rounds = 0;
       const maxRounds = 60;
       let timeoutRetries = 0;
-      const maxTimeoutRetries = 4;
+      const maxTimeoutRetries = 8;
       let lastData: SyncApiResponse | null = null;
 
-      const maxRoundsForScope = scope === "compra_agil" ? 2 : maxRounds;
+      const maxRoundsForScope = scope === "compra_agil" ? 12 : maxRounds;
 
       while (rounds < maxRoundsForScope) {
         rounds += 1;
@@ -189,10 +195,9 @@ export function SyncMercadoPublicoButton({
             continue;
           }
           if (isGatewayTimeout) {
-            router.refresh();
-            throw new Error(
-              "El servidor tardó demasiado en esta ronda. Pulsa Sincronizar de nuevo; retoma donde quedó y ya guardó avances parciales."
-            );
+            continueBatch = true;
+            await new Promise((resolve) => setTimeout(resolve, 800));
+            continue;
           }
           throw new Error(
             `Respuesta inválida del servidor (${res.status}): ${raw.slice(0, 100)}`
@@ -248,16 +253,22 @@ export function SyncMercadoPublicoButton({
             ? "actualización rápida"
             : "actualización incremental";
 
-      if (!data.done) {
+      let suffix = "";
+      if (!data.done && scope === "compra_agil") {
+        suffix = ` · ${rounds} paso${rounds !== 1 ? "s" : ""} (rotación continua; puedes sincronizar de nuevo)`;
+      } else if (!data.done) {
         setError(
           "Sync parcial por tiempo. Pulsa Sincronizar otra vez para continuar (retoma automáticamente)."
         );
+        suffix = " · incompleta";
+      } else if (data.partial) {
+        suffix = " · incompleta";
       }
 
       setResult(
         `${modeLabel}: ${s.fetched} revisados · ${s.created} nuevos · ${s.updated} actualizados` +
           (s.archived && s.archived > 0 ? ` · ${s.archived} archivados` : "") +
-          (data.partial && !data.done ? " · incompleta" : "") +
+          suffix +
           (avisos.length ? ` · ${avisos.length} avisos` : "")
       );
       if (avisos.length && data.done) {
@@ -304,12 +315,23 @@ export function SyncMercadoPublicoButton({
             <strong className="text-foreground">{lastManualSyncLabel}</strong>
           </p>
           <p>
-            Última sync automática (cron ~01:00 CL):{" "}
+            Última importación desde cron (~01:00 CL):{" "}
             <strong className="text-foreground">{lastCronSyncLabel}</strong>
             {lastCronSummaryPartial === true && lastCronSyncLabel !== "Nunca" && (
               <span className="text-amber-700"> · sin novedades</span>
             )}
           </p>
+          {lastCronAttemptLabel !== "Nunca" && (
+            <p className="text-[10px] text-muted-foreground">
+              Último intento del cron: <strong className="text-foreground">{lastCronAttemptLabel}</strong>
+            </p>
+          )}
+          {cronImportStale && (
+            <p className="text-[10px] text-amber-800">
+              El cron se ejecutó después de la última importación, pero Mercado Público no entregó datos
+              {cronMpError ? `: ${cronMpError}` : "."} Pulsa Sincronizar Compra Ágil o reintenta más tarde.
+            </p>
+          )}
           {lastCronSummaryText && (
             <p className="text-[10px] text-muted-foreground">Último cron: {lastCronSummaryText}</p>
           )}

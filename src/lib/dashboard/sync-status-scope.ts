@@ -14,6 +14,8 @@ export async function getMpSyncStatusForScope(
   lastCronSummaryPartial: boolean | null;
   lastCronSummaryText: string | null;
   pendingQueueLabel: string | null;
+  cronImportStale: boolean;
+  cronMpError: string | null;
   hasSyncedData: boolean;
   isFirstSync: boolean;
   lastSyncLabel: string;
@@ -57,6 +59,8 @@ export async function getMpSyncStatusForScope(
     created?: number;
     updated?: number;
     archived?: number;
+    mpError?: string | null;
+    at?: string;
   } | null;
   const lastCronSummaryPartial =
     typeof cronSummary?.partial === "boolean" ? cronSummary.partial : null;
@@ -81,9 +85,21 @@ export async function getMpSyncStatusForScope(
         index?: number;
         candidates?: unknown[];
         finalized?: boolean;
+        errors?: string[];
       }
     | null
     | undefined;
+
+  const pendingMpError =
+    pendingRaw?.errors?.find((e) => /chilecompra|timeout|504|503|502|no respondió/i.test(e)) ??
+    null;
+  const cronMpError = cronSummary?.mpError ?? pendingMpError ?? lastCronError;
+
+  const cronImportStale = Boolean(
+    lastCronAttemptAt &&
+      lastCronSyncAt &&
+      new Date(lastCronAttemptAt).getTime() - new Date(lastCronSyncAt).getTime() > 3 * 60 * 60 * 1000
+  );
 
   let pendingQueueLabel: string | null = null;
   if (pendingRaw && !pendingRaw.finalized) {
@@ -108,6 +124,8 @@ export async function getMpSyncStatusForScope(
     lastCronSummaryPartial,
     lastCronSummaryText,
     pendingQueueLabel,
+    cronImportStale,
+    cronMpError,
     hasSyncedData: (count ?? 0) > 0,
     isFirstSync: !lastSyncAt,
     lastSyncLabel: formatLastSyncCL(lastSyncAt),

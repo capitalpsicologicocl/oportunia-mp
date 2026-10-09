@@ -236,10 +236,11 @@ const CRON_CA_KEYWORDS_PER_BATCH = 8;
 /** Páginas de listado (50 ítems) por pasada de cron. */
 const CRON_CA_LISTING_PAGES_PER_RUN = 4;
 /** Páginas de listado por pasada de sync manual (HTTP ≤60 s). */
-const MANUAL_CA_LISTING_PAGES_PER_PASS = 2;
+const MANUAL_CA_LISTING_PAGES_PER_PASS = 1;
 /** Lotes de keywords por pasada (evita timeout). */
 const CRON_CA_KEYWORD_BATCHES_PER_CALL = 1;
-const MANUAL_CA_PASSES_PER_HTTP = 3;
+/** Una pasada por request HTTP (Vercel ~60 s); el botón encadena varias requests. */
+const MANUAL_CA_PASSES_PER_HTTP = 1;
 /** Tope acumulado de páginas de listado por ciclo nocturno (se reinicia al finalizar CA). */
 const CRON_CA_LISTING_MAX_PAGE = 30;
 
@@ -1030,25 +1031,31 @@ async function finalizeDashboardSync(
   scope: Exclude<SyncScope, "all">,
   options?: { fast?: boolean; preArchived?: number; caRollingPass?: boolean }
 ): Promise<DashboardSyncBatchResult> {
-  const archived = options?.fast
-    ? (options.preArchived ?? 0)
-    : (await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }))).archived;
+  const skipArchiveForManualCaPass =
+    options?.caRollingPass && scope === "compra_agil" && !pending.cron_run;
+  const archived = skipArchiveForManualCaPass
+    ? 0
+    : options?.fast
+      ? (options.preArchived ?? 0)
+      : (await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }))).archived;
 
   if (options?.caRollingPass && scope === "compra_agil") {
-    const incompleteLimit = pending.cron_run ? 5 : 12;
-    const staleLimit = pending.cron_run ? 4 : 8;
+    const incompleteLimit = pending.cron_run ? 5 : 2;
+    const staleLimit = pending.cron_run ? 4 : 0;
     const incomplete = await refreshIncompleteProcesses(incompleteLimit, notifyFilters, {
       markDashboardSync: true,
       notifyFilters,
     }).catch(() => ({ refreshed: 0, errors: [] }));
     pending.updated += incomplete.refreshed;
 
-    const stale = await refreshStaleProcesses(staleLimit, notifyFilters, {
-      markDashboardSync: true,
-      notifyFilters,
-    }).catch(() => ({ refreshed: 0, notFound: 0, errors: [] }));
-    pending.updated += stale.refreshed;
-    pending.errors.push(...stale.errors.slice(0, 2));
+    if (staleLimit > 0) {
+      const stale = await refreshStaleProcesses(staleLimit, notifyFilters, {
+        markDashboardSync: true,
+        notifyFilters,
+      }).catch(() => ({ refreshed: 0, notFound: 0, errors: [] }));
+      pending.updated += stale.refreshed;
+      pending.errors.push(...stale.errors.slice(0, 2));
+    }
 
     pending.ca_fetched = false;
     pending.finalized = false;
@@ -1165,8 +1172,8 @@ export interface DashboardSyncBatchOptions {
 }
 
 /** Máx. ms por request HTTP de sync manual (Vercel corta ~60 s). */
-const MANUAL_SYNC_HTTP_BUDGET_MS = 52_000;
-const MANUAL_SYNC_PASS_BUDGET_MS = 45_000;
+const MANUAL_SYNC_HTTP_BUDGET_MS = 48_000;
+const MANUAL_SYNC_PASS_BUDGET_MS = 42_000;
 const MANUAL_FAST_KEYWORD_BATCH = 3;
 const MANUAL_SYNC_BUDGET_MS = 240_000;
 const MANUAL_CANDIDATE_CAP = 50;
@@ -1220,7 +1227,7 @@ export async function runFastManualSync(
   }
 
   if (scope === "compra_agil") {
-    return { ...result, done: true, partial: false };
+    return { ...result, done: false, partial: false };
   }
 
   if (result.done) return result;
@@ -1505,6 +1512,11 @@ export async function runDashboardSyncCron(options?: {
     partial: !workDone && !cronHealthy && partial,
   };
 
+  const caPending = await loadMpSyncPending(supabase, "compra_agil");
+  const mpError =
+    caPending?.errors?.find((e) => /chilecompra|timeout|504|503|502|no respondió/i.test(e)) ??
+    null;
+
   await supabase
     .from("org_settings")
     .update({
@@ -1514,11 +1526,22 @@ export async function runDashboardSyncCron(options?: {
         created: summary.created,
         updated: summary.updated,
         archived,
+        cronCaPasses,
+        mpError: mpError?.slice(0, 200) ?? null,
         at: new Date().toISOString(),
       },
       updated_at: new Date().toISOString(),
     })
     .eq("organization_id", DEFAULT_ORG_ID);
+
+  if (!workDone && mpError) {
+    await recordCronFailure(mpError).catch(() => undefined);
+  } else if (workDone) {
+    await supabase
+      .from("org_settings")
+      .update({ last_cron_error: null, updated_at: new Date().toISOString() })
+      .eq("organization_id", DEFAULT_ORG_ID);
+  }
 
   return summary;
 }
