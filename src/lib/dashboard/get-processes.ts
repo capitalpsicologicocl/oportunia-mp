@@ -337,31 +337,30 @@ export async function getDashboardProcesses(
     rows = rows.filter((r) => matchesCrmFilter(r.en_crm, r.crm_columna, filters.crm!));
   }
 
-  rows = rows.filter((row) => {
-    const qTrimmed = filters.q?.trim() ?? "";
-    if (
-      qTrimmed.length > 0 &&
-      looksLikeProcessCodigo(qTrimmed) &&
-      row.codigo_externo.toLowerCase() === qTrimmed.toLowerCase()
-    ) {
-      return true;
-    }
-    return !isExcluded(buildSearchText(row));
-  });
+  const qTrimmed = filters.q?.trim() ?? "";
+  const searchingCodigo = qTrimmed.length > 0 && looksLikeProcessCodigo(qTrimmed);
 
-  if (filtro !== "todos") {
-    const qTrimmed = filters.q?.trim() ?? "";
-    const skipContentFilter = qTrimmed.length > 0 && looksLikeProcessCodigo(qTrimmed);
-    if (!skipContentFilter) {
-      rows = rows.filter((row) =>
-        matchesContentFilter(
+  if (searchingCodigo) {
+    rows = rows.filter(
+      (row) => row.codigo_externo.toLowerCase() === qTrimmed.toLowerCase()
+    );
+  } else {
+    rows = rows.filter((row) => {
+      if (row.estado === "pendiente_sync") return true;
+      return !isExcluded(buildSearchText(row));
+    });
+
+    if (filtro !== "todos") {
+      rows = rows.filter((row) => {
+        if (row.estado === "pendiente_sync") return true;
+        return matchesContentFilter(
           buildSearchText(row),
           keywords,
           rubros,
           filtro,
           row.rubros_unspsc
-        )
-      );
+        );
+      });
     }
   }
 

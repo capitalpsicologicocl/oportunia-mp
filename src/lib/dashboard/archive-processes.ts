@@ -21,6 +21,7 @@ export function shouldArchiveDashboardProcess(row: DashboardArchiveCandidate): b
   if (row.dashboard_archived_at) return false;
   if (row.adjudicado_a_mi) return false;
   if (row.en_pipeline) return false;
+  if (/pendiente_sync/i.test(row.estado ?? "")) return false;
 
   const estado = row.estado ?? "";
 

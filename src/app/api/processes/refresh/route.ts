@@ -8,7 +8,7 @@ export async function POST(request: NextRequest) {
     const body = (await request.json()) as { codigo?: string; batch?: boolean; limit?: number };
 
     if (body.codigo?.trim()) {
-      const result = await refreshProcessInDb(body.codigo.trim());
+      const result = await refreshProcessInDb(body.codigo.trim(), { force: true });
       return NextResponse.json({ ok: true, result });
     }
 

@@ -911,7 +911,12 @@ async function appendCompraAgilCandidates(
   const keywordPublicadoDesde = caKeywordSearchPublicadoDesdeIso();
   /** Listado reciente: siempre ventana 72 h (keywords y listado alineados). */
   const listingPublicadoDesde = keywordPublicadoDesde;
-  const mpFast = { maxAttempts: 2 as const };
+  const mpAttempts = Math.max(1, Number.parseInt(process.env.MP_SYNC_MAX_ATTEMPTS ?? "2", 10) || 2);
+  const keywordAttempts = Math.max(
+    1,
+    Number.parseInt(process.env.MP_KEYWORD_MAX_ATTEMPTS ?? "1", 10) || 1
+  );
+  const mpFast = { maxAttempts: keywordAttempts };
   const caEstados = "publicada,cerrada,proveedor_seleccionado,desierta,cancelada";
 
   const outOfTime = () =>
@@ -938,16 +943,24 @@ async function appendCompraAgilCandidates(
     pending.ca_keywords_skipped = false;
   }
 
+  const verbose = process.env.SYNC_VERBOSE === "1";
   const runListingSlice = async (pageCount: number): Promise<void> => {
     if (outOfTime() || pageCount <= 0) return;
     advanceCaRollingCursors(pending);
     const startPage = pending.ca_list_page ?? 1;
+    if (verbose) console.log(`[sync] listado CA pág. ${startPage} (${pageCount} págs)`);
     const listing = await fetchCompraAgilPublishedSince(
       ticket,
       listingPublicadoDesde,
       pageCount,
-      { maxAttempts: 2, estado: caEstados, startPage }
+        { maxAttempts: mpAttempts, estado: caEstados, startPage }
     );
+    if (verbose) {
+      console.log(
+        `[sync] listado CA: ${listing.items.length} ítems` +
+          (listing.apiError ? ` · error ${listing.apiError}` : "")
+      );
+    }
     if (listing.apiError) {
       onError(`Compra ágil (listado reciente): ${listing.apiError}`);
       return;
@@ -987,6 +1000,11 @@ async function appendCompraAgilCandidates(
   if (!pending.ca_keywords_skipped && keywordOffset < terms.length && !outOfTime()) {
     try {
       do {
+        if (verbose) {
+          console.log(
+            `[sync] keywords CA ${keywordOffset + 1}-${Math.min(keywordOffset + keywordBatchSize, terms.length)}/${terms.length}`
+          );
+        }
         const batch = await fetchCompraAgilForTerms(
           ticket,
           terms,
@@ -1396,6 +1414,8 @@ export async function runDashboardSyncCron(options?: {
   const deadline = Date.now() + maxMs;
   const supabase = createServiceClient();
 
+  await retryPendingMpImports(12).catch(() => undefined);
+
   const { archived: archivedAtStart } = await archiveStaleDashboardProcesses().catch(() => ({
     archived: 0,
   }));
@@ -1661,10 +1681,7 @@ export async function refreshProcessByCodigo(
     const raw = await fetchLicitacionByCodigo(ticket, codigo);
     return raw ? normalizeLicitacion(raw) : null;
   }
-  let raw = await fetchCompraAgilByCodigo(ticket, codigo, { listOnly: true });
-  if (!raw) {
-    raw = await fetchCompraAgilByCodigo(ticket, codigo, { listOnly: false });
-  }
+  const raw = await fetchCompraAgilByCodigo(ticket, codigo, options);
   return raw ? normalizeCompraAgil(raw) : null;
 }
 
@@ -1672,15 +1689,46 @@ export async function refreshProcessByCodigo(
 export async function refreshProcessInDb(
   codigo: string,
   options?: { force?: boolean }
-): Promise<"updated" | "not_found"> {
-  return importProcessByCodigo(codigo, options);
+): Promise<"updated" | "not_found" | "queued"> {
+  return importProcessByCodigo(codigo, { ...options, queueIfMissing: true });
+}
+
+export const PENDING_MP_HASH = "pending_mp";
+
+async function enqueuePendingMpImport(
+  supabase: ReturnType<typeof createServiceClient>,
+  codigo: string,
+  tipo: ProcessTipo
+): Promise<void> {
+  const { data: existing } = await supabase
+    .from("processes")
+    .select("id, content_hash")
+    .eq("organization_id", DEFAULT_ORG_ID)
+    .eq("codigo_externo", codigo)
+    .maybeSingle();
+  if (existing && existing.content_hash !== PENDING_MP_HASH) return;
+
+  await supabase.from("processes").upsert(
+    {
+      organization_id: DEFAULT_ORG_ID,
+      codigo_externo: codigo,
+      tipo,
+      nombre: `Importando ${codigo} — reintento automático`,
+      estado: "pendiente_sync",
+      content_hash: PENDING_MP_HASH,
+      synced_via_dashboard: true,
+      dashboard_archived_at: null,
+      last_synced_at: new Date().toISOString(),
+    },
+    { onConflict: "organization_id,codigo_externo" }
+  );
 }
 
 /** Importa una CA/Licitación por código exacto (sin filtro de contenido). */
 export async function importProcessByCodigo(
   codigo: string,
-  options?: { force?: boolean }
-): Promise<"updated" | "not_found"> {
+  options?: { force?: boolean; queueIfMissing?: boolean }
+): Promise<"updated" | "not_found" | "queued"> {
   const { supabase, orgRut, ticket } = await getOrgContext();
   if (!ticket) {
     throw new Error("Configura el ticket de ChileCompra en org_settings");
@@ -1695,11 +1743,14 @@ export async function importProcessByCodigo(
     .maybeSingle();
 
   const tipo: ProcessTipo = existing?.tipo ?? inferProcessTipo(trimmed);
-  let normalized = await refreshProcessByCodigo(ticket, trimmed, tipo, { listOnly: true });
+  const normalized = await refreshProcessByCodigo(ticket, trimmed, tipo);
   if (!normalized) {
-    normalized = await refreshProcessByCodigo(ticket, trimmed, tipo, { listOnly: false });
+    if (options?.queueIfMissing ?? true) {
+      await enqueuePendingMpImport(supabase, trimmed, tipo);
+      return "queued";
+    }
+    return "not_found";
   }
-  if (!normalized) return "not_found";
 
   await upsertProcess(supabase, normalized, orgRut, {
     notifyFilters: await loadOrgContentFilters(),
@@ -1707,6 +1758,44 @@ export async function importProcessByCodigo(
     forceRefresh: options?.force ?? true,
   });
   return "updated";
+}
+
+export async function retryPendingMpImports(limit = 10): Promise<{
+  imported: number;
+  stillPending: number;
+  errors: string[];
+}> {
+  const { supabase } = await getOrgContext();
+  const { data: rows } = await supabase
+    .from("processes")
+    .select("codigo_externo, tipo")
+    .eq("organization_id", DEFAULT_ORG_ID)
+    .eq("content_hash", PENDING_MP_HASH)
+    .limit(limit);
+
+  let imported = 0;
+  const errors: string[] = [];
+  for (const row of rows ?? []) {
+    try {
+      const result = await importProcessByCodigo(row.codigo_externo, {
+        force: true,
+        queueIfMissing: true,
+      });
+      if (result === "updated") imported += 1;
+    } catch (err) {
+      errors.push(
+        `${row.codigo_externo}: ${err instanceof Error ? err.message : "error"}`
+      );
+    }
+  }
+
+  const { count } = await supabase
+    .from("processes")
+    .select("*", { count: "exact", head: true })
+    .eq("organization_id", DEFAULT_ORG_ID)
+    .eq("content_hash", PENDING_MP_HASH);
+
+  return { imported, stillPending: count ?? 0, errors };
 }
 
 const REFRESH_CONCURRENCY = 2;
@@ -2129,7 +2218,9 @@ export async function refreshKanbanPipelineProcesses(
 
 export async function maybeRefreshSearchProcess(q?: string): Promise<void> {
   if (!q || !looksLikeProcessCodigo(q)) return;
-  await importProcessByCodigo(q.trim(), { force: true }).catch(() => undefined);
+  await importProcessByCodigo(q.trim(), { force: true, queueIfMissing: true }).catch(
+    () => undefined
+  );
 }
 
 export async function runIngestion(): Promise<IngestSummary> {

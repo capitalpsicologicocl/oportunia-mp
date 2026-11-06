@@ -40,6 +40,49 @@ async function sleepMs(ms: number) {
 }
 
 const RETRYABLE_HTTP = new Set([429, 502, 503, 504]);
+function mpFetchTimeoutMs(): number {
+  return Math.max(5_000, Number.parseInt(process.env.MP_FETCH_TIMEOUT_MS ?? "20000", 10) || 20_000);
+}
+
+function isRetryableFetchError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const name = "name" in err ? String(err.name) : "";
+  const message = "message" in err ? String(err.message) : "";
+  return (
+    name === "AbortError" ||
+    name === "TimeoutError" ||
+    /abort|timeout|timed out|network|ECONNRESET|ETIMEDOUT|fetch failed/i.test(message)
+  );
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = mpFetchTimeoutMs()
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutError = Object.assign(new Error(`timeout ${timeoutMs}ms`), { name: "TimeoutError" });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(timeoutError);
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      fetch(url, { ...init, signal: controller.signal }),
+      timeoutPromise,
+    ]);
+  } catch (err) {
+    if (isRetryableFetchError(err) && process.env.SYNC_VERBOSE === "1") {
+      console.log(`[sync] timeout ${timeoutMs}ms ${url.slice(0, 90)}`);
+    }
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 async function fetchWithRetry(
   doFetch: () => Promise<Response>,
@@ -47,22 +90,31 @@ async function fetchWithRetry(
   maxAttempts = 5
 ): Promise<Response> {
   const waits = [0, 2000, 5000, 10000, 15000].slice(0, maxAttempts);
+  let lastError: unknown;
   for (let attempt = 0; attempt < waits.length; attempt += 1) {
     if (waits[attempt] > 0) await sleepMs(waits[attempt]);
-    const response = await doFetch();
-    if (!RETRYABLE_HTTP.has(response.status)) return response;
+    try {
+      const response = await doFetch();
+      if (!RETRYABLE_HTTP.has(response.status)) return response;
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (err) {
+      lastError = err;
+      if (!isRetryableFetchError(err)) throw err;
+    }
   }
 
   if (label.includes("compra-agil")) {
     throw new Error(`ChileCompra API2: servicio no respondió (${label}), reintenta más tarde`);
   }
-  throw new Error(`ChileCompra API: cuota o timeout (${label})`);
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`ChileCompra API: cuota o timeout (${label})`);
 }
 
 async function fetchJson<T>(url: string): Promise<T | null> {
   const response = await fetchWithRetry(
     () =>
-      fetch(url, {
+      fetchWithTimeout(url, {
         headers: { Accept: "application/json" },
         next: { revalidate: 0 },
       }),
@@ -81,7 +133,7 @@ async function fetchApi2<T>(
   path: string,
   ticket: string,
   params?: Record<string, string | number>,
-  options?: { maxAttempts?: number }
+  options?: { maxAttempts?: number; timeoutMs?: number }
 ): Promise<T | null> {
   const url = new URL(path, COMPRA_AGIL_BASE);
   if (params) {
@@ -92,12 +144,17 @@ async function fetchApi2<T>(
     }
   }
 
+  const timeoutMs = options?.timeoutMs;
   const response = await fetchWithRetry(
     () =>
-      fetch(url.toString(), {
-        headers: { Accept: "application/json", ticket },
-        next: { revalidate: 0 },
-      }),
+      fetchWithTimeout(
+        url.toString(),
+        {
+          headers: { Accept: "application/json", ticket },
+          next: { revalidate: 0 },
+        },
+        timeoutMs
+      ),
     path.includes("compra-agil") ? `compra-agil ${path}` : path,
     options?.maxAttempts ?? 5
   );
@@ -480,9 +537,15 @@ export async function fetchCompraAgilByQuery(
     if (options?.publicadoDesde) params.publicado_desde = options.publicadoDesde;
     if (options?.estado) params.estado = options.estado;
 
-    const data = await fetchApi2<CompraAgilListResponse>("/v2/compra-agil", ticket, params, {
-      maxAttempts: options?.maxAttempts,
-    });
+    let data: CompraAgilListResponse | null = null;
+    try {
+      data = await fetchApi2<CompraAgilListResponse>("/v2/compra-agil", ticket, params, {
+        maxAttempts: options?.maxAttempts ?? 1,
+        timeoutMs: 8_000,
+      });
+    } catch {
+      break;
+    }
 
     const pageItems = data?.items ?? data?.Items ?? [];
     items.push(...pageItems);
@@ -533,7 +596,7 @@ export async function fetchCompraAgilPublishedSince(
         "/v2/compra-agil",
         ticket,
         params,
-        { maxAttempts: options?.maxAttempts }
+        { maxAttempts: options?.maxAttempts ?? 2, timeoutMs: 12_000 }
       );
       const pageItems = data?.items ?? data?.Items ?? [];
       totalPages = Math.max(1, data?.paginacion?.total_paginas ?? 1);
@@ -631,7 +694,7 @@ async function fetchCompraAgilListItemByCodigo(
       "/v2/compra-agil",
       ticket,
       { id: trimmed },
-      { maxAttempts }
+      { maxAttempts, timeoutMs: 8_000 }
     );
     const idItems = byId?.items ?? byId?.Items ?? [];
     const idMatch = idItems.find((raw) => {
@@ -647,27 +710,31 @@ async function fetchCompraAgilListItemByCodigo(
     // id no disponible en todos los tickets; continuar con búsqueda q
   }
 
-  for (let page = 1; page <= maxPages; page += 1) {
-    const data = await fetchApi2<CompraAgilListResponse>(
-      "/v2/compra-agil",
-      ticket,
-      {
-        q: trimmed,
-        tamano_pagina: 50,
-        numero_pagina: page,
-      },
-      { maxAttempts }
-    );
-    const items = data?.items ?? data?.Items ?? [];
-    const match = items.find((raw) => {
-      const item = raw as Record<string, unknown>;
-      return pickString(item.codigo, item.Codigo) === trimmed;
-    }) as Record<string, unknown> | undefined;
-    if (match) return match;
+  try {
+    for (let page = 1; page <= maxPages; page += 1) {
+      const data = await fetchApi2<CompraAgilListResponse>(
+        "/v2/compra-agil",
+        ticket,
+        {
+          q: trimmed,
+          tamano_pagina: 50,
+          numero_pagina: page,
+        },
+        { maxAttempts, timeoutMs: 8_000 }
+      );
+      const items = data?.items ?? data?.Items ?? [];
+      const match = items.find((raw) => {
+        const item = raw as Record<string, unknown>;
+        return pickString(item.codigo, item.Codigo) === trimmed;
+      }) as Record<string, unknown> | undefined;
+      if (match) return match;
 
-    const totalPages = Math.max(1, data?.paginacion?.total_paginas ?? 1);
-    if (page >= totalPages || items.length === 0) break;
-    if (maxPages > 1) await sleepMs(MP_COMPRA_AGIL_TERM_DELAY_MS);
+      const totalPages = Math.max(1, data?.paginacion?.total_paginas ?? 1);
+      if (page >= totalPages || items.length === 0) break;
+      if (maxPages > 1) await sleepMs(MP_COMPRA_AGIL_TERM_DELAY_MS);
+    }
+  } catch {
+    // q= por código a menudo timeout; el caller usa GET detalle
   }
 
   return null;
@@ -680,9 +747,36 @@ export async function fetchCompraAgilByCodigo(
 ) {
   const trimmed = codigo.trim();
   if (!trimmed) return null;
+  const timeoutMs = 8_000;
+  const looksLikeTarget = (raw: Record<string, unknown> | null | undefined) => {
+    if (!raw) return false;
+    const code = pickString(raw.codigo, raw.Codigo, raw.codigoCot, raw.CodigoCOT);
+    return !code || code.toUpperCase() === trimmed.toUpperCase();
+  };
 
-  const fromList = await fetchCompraAgilListItemByCodigo(ticket, trimmed, 1, 2);
-  if (fromList) return fromList;
+  if (!options?.listOnly) {
+    try {
+      const detail = await fetchApi2<Record<string, unknown>>(
+        `/v2/compra-agil/${encodeURIComponent(trimmed)}`,
+        ticket,
+        undefined,
+        { maxAttempts: 2, timeoutMs }
+      );
+      if (detail && looksLikeTarget(detail) && Object.keys(detail).length > 2) {
+        return detail;
+      }
+    } catch {
+      /* API2 detalle a menudo da 504; seguir con listado */
+    }
+  }
+
+  try {
+    const fromList = await fetchCompraAgilListItemByCodigo(ticket, trimmed, 1, 1);
+    if (fromList) return fromList;
+  } catch {
+    /* q=/id= también puede colgarse */
+  }
+
   if (options?.listOnly) return null;
 
   try {
@@ -690,7 +784,7 @@ export async function fetchCompraAgilByCodigo(
       `/v2/compra-agil/${encodeURIComponent(trimmed)}`,
       ticket,
       undefined,
-      { maxAttempts: 2 }
+      { maxAttempts: 1, timeoutMs: 12_000 }
     );
   } catch {
     return null;

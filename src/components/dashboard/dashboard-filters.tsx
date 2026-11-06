@@ -1,10 +1,11 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useTransition } from "react";
+import { useCallback, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { looksLikeProcessCodigo } from "@/lib/dashboard/process-codigo";
 import {
   Select,
   SelectContent,
@@ -30,6 +31,8 @@ export function DashboardFilters({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
 
   const q = searchParams.get("q") ?? "";
   const filtro = searchParams.get("filtro") ?? "ambos";
@@ -53,7 +56,31 @@ export function DashboardFilters({
     [router, searchParams, basePath]
   );
 
+  async function applySearch(rawQ: string) {
+    const value = rawQ.trim();
+    setImportMsg(null);
+    if (looksLikeProcessCodigo(value)) {
+      setImporting(true);
+      try {
+        const res = await fetch("/api/processes/import-codigo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ codigo: value }),
+        });
+        const data = (await res.json()) as { message?: string; error?: string; result?: string };
+        setImportMsg(data.message ?? data.error ?? null);
+        router.refresh();
+      } catch {
+        setImportMsg("No se pudo consultar Mercado Público. Se reintentará en el próximo ciclo.");
+      } finally {
+        setImporting(false);
+      }
+    }
+    updateParams({ q: value });
+  }
+
   function clearFilters() {
+    setImportMsg(null);
     startTransition(() => router.push(basePath));
   }
 
@@ -68,7 +95,7 @@ export function DashboardFilters({
             placeholder="Nombre, código, productos…"
             onKeyDown={(e) => {
               if (e.key === "Enter") {
-                updateParams({ q: (e.target as HTMLInputElement).value });
+                void applySearch((e.target as HTMLInputElement).value);
               }
             }}
           />
@@ -170,20 +197,22 @@ export function DashboardFilters({
 
         <Button
           variant="brand"
-          disabled={isPending}
+          disabled={isPending || importing}
           onClick={() => {
             const input = document.getElementById("q") as HTMLInputElement | null;
-            updateParams({ q: input?.value ?? "" });
+            void applySearch(input?.value ?? "");
           }}
         >
-          {isPending ? "Filtrando…" : "Aplicar"}
+          {importing ? "Importando…" : isPending ? "Filtrando…" : "Aplicar"}
         </Button>
         <Button variant="outline" onClick={clearFilters} disabled={isPending}>
           Limpiar
         </Button>
       </div>
 
+      {importMsg && <p className="text-xs text-[#11233d]">{importMsg}</p>}
       <p className="text-xs text-muted-foreground">
+        Si pegas un código (ej. 2583-876-COT26) se importa aunque MP esté lento; el cron lo completa solo.
         Filtro activo:{" "}
         {filtro === "ambos"
           ? "procesos que coinciden con alguna keyword O algún rubro tuyo"

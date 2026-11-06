@@ -9,7 +9,8 @@
     "lint": "eslint",
     "migrate:sheets": "tsx --env-file=.env.local scripts/migrate-from-sheets.ts",
     "create-owner": "tsx --env-file=.env.local scripts/create-owner.ts",
-    "discard:ca-pages": "tsx --env-file=.env.local scripts/discard-ca-pages.ts"
+    "discard:ca-pages": "tsx --env-file=.env.local scripts/discard-ca-pages.ts",
+    "sync:nightly": "tsx --env-file=.env.local scripts/run-nightly-sync.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

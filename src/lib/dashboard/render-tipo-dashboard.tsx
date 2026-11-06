@@ -11,7 +11,6 @@ import { ProcessTableClient } from "@/components/dashboard/process-table-client"
 import { SyncMercadoPublicoButton } from "@/components/dashboard/sync-mp-button";
 import { getDashboardProcesses, type DashboardSort } from "@/lib/dashboard/get-processes";
 import { getMpSyncStatusForScope } from "@/lib/dashboard/sync-status-scope";
-import { maybeRefreshSearchProcess } from "@/lib/ingest/service";
 import { getSessionUser } from "@/lib/auth/session";
 import { getUnreadCount } from "@/lib/notifications/queries";
 import { getOnboardingStatus } from "@/lib/onboarding/status";
@@ -85,8 +84,6 @@ export async function renderTipoDashboard({
 
   const region = param(searchParams.region);
   const organismo = param(searchParams.organismo);
-
-  await maybeRefreshSearchProcess(searchQ);
 
   const scope = tipo === "compra_agil" ? "compra_agil" : "licitacion";
   const session = await getSessionUser();
