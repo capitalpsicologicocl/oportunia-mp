@@ -5,7 +5,7 @@ import { importProcessByCodigo } from "@/lib/ingest/service";
 import { looksLikeProcessCodigo } from "@/lib/dashboard/process-codigo";
 
 export const runtime = "nodejs";
-export const maxDuration = 45;
+export const maxDuration = 10;
 
 export async function POST(request: NextRequest) {
   const session = await getSessionUser();

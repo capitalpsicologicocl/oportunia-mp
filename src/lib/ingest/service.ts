@@ -1675,7 +1675,7 @@ export async function refreshProcessByCodigo(
   ticket: string,
   codigo: string,
   tipo: ProcessTipo,
-  options?: { listOnly?: boolean }
+  options?: { listOnly?: boolean; fast?: boolean }
 ): Promise<NormalizedProcess | null> {
   if (tipo === "licitacion") {
     const raw = await fetchLicitacionByCodigo(ticket, codigo);
@@ -1695,7 +1695,16 @@ export async function refreshProcessInDb(
 
 export const PENDING_MP_HASH = "pending_mp";
 
-async function enqueuePendingMpImport(
+export async function enqueuePendingMpImport(
+  codigo: string,
+  tipo?: ProcessTipo
+): Promise<void> {
+  const supabase = createServiceClient();
+  const inferred = tipo ?? inferProcessTipo(codigo);
+  await enqueuePendingMpImportRow(supabase, codigo, inferred);
+}
+
+async function enqueuePendingMpImportRow(
   supabase: ReturnType<typeof createServiceClient>,
   codigo: string,
   tipo: ProcessTipo
@@ -1727,7 +1736,7 @@ async function enqueuePendingMpImport(
 /** Importa una CA/Licitación por código exacto (sin filtro de contenido). */
 export async function importProcessByCodigo(
   codigo: string,
-  options?: { force?: boolean; queueIfMissing?: boolean }
+  options?: { force?: boolean; queueIfMissing?: boolean; fast?: boolean }
 ): Promise<"updated" | "not_found" | "queued"> {
   const { supabase, orgRut, ticket } = await getOrgContext();
   if (!ticket) {
@@ -1743,12 +1752,16 @@ export async function importProcessByCodigo(
     .maybeSingle();
 
   const tipo: ProcessTipo = existing?.tipo ?? inferProcessTipo(trimmed);
-  const normalized = await refreshProcessByCodigo(ticket, trimmed, tipo);
+  const queueIfMissing = options?.queueIfMissing ?? true;
+  if (queueIfMissing) {
+    await enqueuePendingMpImportRow(supabase, trimmed, tipo);
+  }
+
+  const normalized = await refreshProcessByCodigo(ticket, trimmed, tipo, {
+    fast: options?.fast ?? true,
+  });
   if (!normalized) {
-    if (options?.queueIfMissing ?? true) {
-      await enqueuePendingMpImport(supabase, trimmed, tipo);
-      return "queued";
-    }
+    if (queueIfMissing) return "queued";
     return "not_found";
   }
 
@@ -1780,6 +1793,7 @@ export async function retryPendingMpImports(limit = 10): Promise<{
       const result = await importProcessByCodigo(row.codigo_externo, {
         force: true,
         queueIfMissing: true,
+        fast: true,
       });
       if (result === "updated") imported += 1;
     } catch (err) {

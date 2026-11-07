@@ -743,11 +743,12 @@ async function fetchCompraAgilListItemByCodigo(
 export async function fetchCompraAgilByCodigo(
   ticket: string,
   codigo: string,
-  options?: { listOnly?: boolean }
+  options?: { listOnly?: boolean; fast?: boolean }
 ) {
   const trimmed = codigo.trim();
   if (!trimmed) return null;
-  const timeoutMs = 8_000;
+  const fast = options?.fast ?? false;
+  const timeoutMs = fast ? 4_000 : 8_000;
   const looksLikeTarget = (raw: Record<string, unknown> | null | undefined) => {
     if (!raw) return false;
     const code = pickString(raw.codigo, raw.Codigo, raw.codigoCot, raw.CodigoCOT);
@@ -760,15 +761,17 @@ export async function fetchCompraAgilByCodigo(
         `/v2/compra-agil/${encodeURIComponent(trimmed)}`,
         ticket,
         undefined,
-        { maxAttempts: 2, timeoutMs }
+        { maxAttempts: 1, timeoutMs }
       );
       if (detail && looksLikeTarget(detail) && Object.keys(detail).length > 2) {
         return detail;
       }
     } catch {
-      /* API2 detalle a menudo da 504; seguir con listado */
+      /* API2 detalle a menudo da 504 */
     }
   }
+
+  if (fast) return null;
 
   try {
     const fromList = await fetchCompraAgilListItemByCodigo(ticket, trimmed, 1, 1);
@@ -778,17 +781,7 @@ export async function fetchCompraAgilByCodigo(
   }
 
   if (options?.listOnly) return null;
-
-  try {
-    return await fetchApi2<Record<string, unknown>>(
-      `/v2/compra-agil/${encodeURIComponent(trimmed)}`,
-      ticket,
-      undefined,
-      { maxAttempts: 1, timeoutMs: 12_000 }
-    );
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 export function normalizeLicitacion(raw: unknown): NormalizedProcess {

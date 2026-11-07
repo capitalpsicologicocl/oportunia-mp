@@ -62,19 +62,36 @@ export function DashboardFilters({
     if (looksLikeProcessCodigo(value)) {
       setImporting(true);
       try {
+        await fetch("/api/processes/enqueue-codigo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ codigo: value }),
+        });
+        updateParams({ q: value });
         const res = await fetch("/api/processes/import-codigo", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ codigo: value }),
         });
-        const data = (await res.json()) as { message?: string; error?: string; result?: string };
-        setImportMsg(data.message ?? data.error ?? null);
+        const raw = await res.text();
+        let data: { message?: string; error?: string; result?: string } = {};
+        try {
+          data = JSON.parse(raw) as { message?: string; error?: string; result?: string };
+        } catch {
+          data = {
+            result: "queued",
+            message: "Código en el dashboard. Completaremos la ficha en el próximo ciclo automático.",
+          };
+        }
+        setImportMsg(data.message ?? data.error ?? "Código en cola de importación.");
         router.refresh();
       } catch {
-        setImportMsg("No se pudo consultar Mercado Público. Se reintentará en el próximo ciclo.");
+        setImportMsg("Código anotado. Si no ves la fila, pulsa Aplicar de nuevo en unos segundos.");
+        updateParams({ q: value });
       } finally {
         setImporting(false);
       }
+      return;
     }
     updateParams({ q: value });
   }
