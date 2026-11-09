@@ -161,6 +161,31 @@ export function ProcessTableClient({
     }
   }
 
+  async function completeFicha(codigo: string, processId: string) {
+    setRowBusy(processId);
+    try {
+      for (let attempt = 1; attempt <= 6; attempt += 1) {
+        const res = await fetch("/api/processes/import-codigo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ codigo }),
+        });
+        const data = (await res.json()) as { result?: string };
+        if (data.result === "updated") {
+          router.refresh();
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+      alert("Mercado Público aún no entrega esta ficha. Intenta Completar ficha de nuevo en un minuto.");
+    } catch {
+      alert("No se pudo completar la ficha ahora.");
+    } finally {
+      setRowBusy(null);
+      router.refresh();
+    }
+  }
+
   async function markReviewed(processId: string) {
     setRowBusy(processId);
     try {
@@ -515,18 +540,17 @@ export function ProcessTableClient({
                     />
                   </TableCell>
                   <TableCell className={`truncate px-2 font-mono text-[10px] ${textClass}`}>
-                    {p.url_publica ? (
-                      <a
-                        href={p.url_publica}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="hover:text-[#d4a017] hover:underline"
-                      >
-                        {p.codigo_externo}
-                      </a>
-                    ) : (
-                      p.codigo_externo
-                    )}
+                    <a
+                      href={
+                        p.url_publica ||
+                        `https://buscador.mercadopublico.cl/ficha?code=${encodeURIComponent(p.codigo_externo)}`
+                      }
+                      target="_blank"
+                      rel="noreferrer"
+                      className="hover:text-[#d4a017] hover:underline"
+                    >
+                      {p.codigo_externo}
+                    </a>
                   </TableCell>
                   <TableCell className="px-2">
                     <HoverTooltip text={p.nombre}>
@@ -546,6 +570,18 @@ export function ProcessTableClient({
                       <Badge className="mt-0.5 bg-emerald-600 px-1 py-0 text-[9px] text-white">
                         Adjud. tuyo
                       </Badge>
+                    )}
+                    {p.estado === "pendiente_sync" && (
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="brand"
+                        className="mt-1 h-6 px-2 text-[10px]"
+                        disabled={rowBusy === p.id}
+                        onClick={() => completeFicha(p.codigo_externo, p.id)}
+                      >
+                        {rowBusy === p.id ? "Completando…" : "Completar ficha"}
+                      </Button>
                     )}
                   </TableCell>
                   {isDiscarded ? (

@@ -1675,7 +1675,7 @@ export async function refreshProcessByCodigo(
   ticket: string,
   codigo: string,
   tipo: ProcessTipo,
-  options?: { listOnly?: boolean; fast?: boolean }
+  options?: { listOnly?: boolean; fast?: boolean; timeoutMs?: number }
 ): Promise<NormalizedProcess | null> {
   if (tipo === "licitacion") {
     const raw = await fetchLicitacionByCodigo(ticket, codigo);
@@ -1725,6 +1725,7 @@ async function enqueuePendingMpImportRow(
       nombre: `Importando ${codigo} — reintento automático`,
       estado: "pendiente_sync",
       content_hash: PENDING_MP_HASH,
+      url_publica: `https://buscador.mercadopublico.cl/ficha?code=${encodeURIComponent(codigo)}`,
       synced_via_dashboard: true,
       dashboard_archived_at: null,
       last_synced_at: new Date().toISOString(),
@@ -1736,7 +1737,7 @@ async function enqueuePendingMpImportRow(
 /** Importa una CA/Licitación por código exacto (sin filtro de contenido). */
 export async function importProcessByCodigo(
   codigo: string,
-  options?: { force?: boolean; queueIfMissing?: boolean; fast?: boolean }
+  options?: { force?: boolean; queueIfMissing?: boolean; fast?: boolean; timeoutMs?: number }
 ): Promise<"updated" | "not_found" | "queued"> {
   const { supabase, orgRut, ticket } = await getOrgContext();
   if (!ticket) {
@@ -1759,6 +1760,7 @@ export async function importProcessByCodigo(
 
   const normalized = await refreshProcessByCodigo(ticket, trimmed, tipo, {
     fast: options?.fast ?? true,
+    timeoutMs: options?.timeoutMs,
   });
   if (!normalized) {
     if (queueIfMissing) return "queued";

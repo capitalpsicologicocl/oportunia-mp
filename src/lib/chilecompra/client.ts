@@ -743,44 +743,32 @@ async function fetchCompraAgilListItemByCodigo(
 export async function fetchCompraAgilByCodigo(
   ticket: string,
   codigo: string,
-  options?: { listOnly?: boolean; fast?: boolean }
+  options?: { listOnly?: boolean; fast?: boolean; timeoutMs?: number }
 ) {
   const trimmed = codigo.trim();
   if (!trimmed) return null;
-  const fast = options?.fast ?? false;
-  const timeoutMs = fast ? 4_000 : 8_000;
+  const timeoutMs = options?.timeoutMs ?? (options?.fast ? 7_000 : mpFetchTimeoutMs());
   const looksLikeTarget = (raw: Record<string, unknown> | null | undefined) => {
     if (!raw) return false;
     const code = pickString(raw.codigo, raw.Codigo, raw.codigoCot, raw.CodigoCOT);
     return !code || code.toUpperCase() === trimmed.toUpperCase();
   };
 
-  if (!options?.listOnly) {
-    try {
-      const detail = await fetchApi2<Record<string, unknown>>(
-        `/v2/compra-agil/${encodeURIComponent(trimmed)}`,
-        ticket,
-        undefined,
-        { maxAttempts: 1, timeoutMs }
-      );
-      if (detail && looksLikeTarget(detail) && Object.keys(detail).length > 2) {
-        return detail;
-      }
-    } catch {
-      /* API2 detalle a menudo da 504 */
-    }
-  }
-
-  if (fast) return null;
-
   try {
-    const fromList = await fetchCompraAgilListItemByCodigo(ticket, trimmed, 1, 1);
-    if (fromList) return fromList;
+    const detail = await fetchApi2<Record<string, unknown>>(
+      `/v2/compra-agil/${encodeURIComponent(trimmed)}`,
+      ticket,
+      undefined,
+      { maxAttempts: 1, timeoutMs }
+    );
+    if (detail && looksLikeTarget(detail) && Object.keys(detail).length > 2) {
+      return detail;
+    }
   } catch {
-    /* q=/id= también puede colgarse */
+    /* detalle 504/timeout */
   }
 
-  if (options?.listOnly) return null;
+  if (options?.listOnly || options?.fast) return null;
   return null;
 }
 

@@ -68,22 +68,33 @@ export function DashboardFilters({
           body: JSON.stringify({ codigo: value }),
         });
         updateParams({ q: value });
-        const res = await fetch("/api/processes/import-codigo", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ codigo: value }),
-        });
-        const raw = await res.text();
-        let data: { message?: string; error?: string; result?: string } = {};
-        try {
-          data = JSON.parse(raw) as { message?: string; error?: string; result?: string };
-        } catch {
-          data = {
-            result: "queued",
-            message: "Código en el dashboard. Completaremos la ficha en el próximo ciclo automático.",
-          };
+        let filled = false;
+        for (let attempt = 1; attempt <= 6; attempt += 1) {
+          setImportMsg(`Completando ficha desde Mercado Público (${attempt}/6)…`);
+          const res = await fetch("/api/processes/import-codigo", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ codigo: value }),
+          });
+          const raw = await res.text();
+          let data: { message?: string; result?: string } = {};
+          try {
+            data = JSON.parse(raw) as { message?: string; result?: string };
+          } catch {
+            data = {};
+          }
+          if (data.result === "updated") {
+            filled = true;
+            setImportMsg("Ficha importada. Ya puedes revisarla.");
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 1200));
         }
-        setImportMsg(data.message ?? data.error ?? "Código en cola de importación.");
+        if (!filled) {
+          setImportMsg(
+            "La fila ya está en el dashboard. Pulsa Completar ficha en la tabla; MP no entregó el detalle en este intento."
+          );
+        }
         router.refresh();
       } catch {
         setImportMsg("Código anotado. Si no ves la fila, pulsa Aplicar de nuevo en unos segundos.");
