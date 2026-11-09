@@ -518,7 +518,7 @@ export async function fetchCompraAgilByQuery(
   ticket: string,
   q: string,
   maxPages = 4,
-  options?: { publicadoDesde?: string; estado?: string; maxAttempts?: number }
+  options?: { publicadoDesde?: string; estado?: string; maxAttempts?: number; timeoutMs?: number }
 ): Promise<unknown[]> {
   const query = stripAccents(q).trim().toLowerCase();
   if (query.length < 3) return [];
@@ -541,7 +541,7 @@ export async function fetchCompraAgilByQuery(
     try {
       data = await fetchApi2<CompraAgilListResponse>("/v2/compra-agil", ticket, params, {
         maxAttempts: options?.maxAttempts ?? 1,
-        timeoutMs: 8_000,
+        timeoutMs: options?.timeoutMs ?? 8_000,
       });
     } catch {
       break;
@@ -572,7 +572,7 @@ export async function fetchCompraAgilPublishedSince(
   ticket: string,
   publicadoDesdeIso: string,
   maxPages = 6,
-  options?: { maxAttempts?: number; estado?: string; startPage?: number }
+  options?: { maxAttempts?: number; estado?: string; startPage?: number; timeoutMs?: number }
 ): Promise<CompraAgilPublishedSinceResult> {
   const items: unknown[] = [];
   const startPage = Math.max(1, options?.startPage ?? 1);
@@ -596,7 +596,7 @@ export async function fetchCompraAgilPublishedSince(
         "/v2/compra-agil",
         ticket,
         params,
-        { maxAttempts: options?.maxAttempts ?? 2, timeoutMs: 12_000 }
+        { maxAttempts: options?.maxAttempts ?? 2, timeoutMs: options?.timeoutMs ?? 8_000 }
       );
       const pageItems = data?.items ?? data?.Items ?? [];
       totalPages = Math.max(1, data?.paginacion?.total_paginas ?? 1);
@@ -627,6 +627,7 @@ export async function fetchCompraAgilForTerms(
     publicadoDesde?: string;
     maxAttempts?: number;
     estado?: string;
+    timeoutMs?: number;
   }
 ): Promise<NormalizedProcess[]> {
   const seen = new Set<string>();
@@ -653,6 +654,7 @@ export async function fetchCompraAgilForTerms(
           publicadoDesde: options?.publicadoDesde,
           estado: options?.estado,
           maxAttempts: options?.maxAttempts,
+          timeoutMs: options?.timeoutMs,
         }
       );
       for (const raw of rawItems) {

@@ -5,6 +5,18 @@ function delayFromEnv(name: string, fallback: number): number {
   return Number.isFinite(ms) && ms >= 0 ? ms : fallback;
 }
 
+/** Vercel Hobby mata serverless ~10 s; Pro puede subir VERCEL_SYNC_BUDGET_MS. */
+export function vercelHttpBudgetMs(fallback = 48_000): number {
+  const raw = process.env.VERCEL_SYNC_BUDGET_MS?.trim();
+  if (raw) return Math.max(3_000, Number.parseInt(raw, 10) || 7_000);
+  if (process.env.VERCEL === "1") return 7_000;
+  return fallback;
+}
+
+export function isVercelRuntime(): boolean {
+  return process.env.VERCEL === "1";
+}
+
 /** Pausa entre consultas licitaciones.json?fecha= (evita 429). */
 export const MP_LICITACION_DATE_DELAY_MS = delayFromEnv(
   "MP_LICITACION_DATE_DELAY_MS",

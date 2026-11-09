@@ -69,8 +69,8 @@ export function DashboardFilters({
         });
         updateParams({ q: value });
         let filled = false;
-        for (let attempt = 1; attempt <= 6; attempt += 1) {
-          setImportMsg(`Completando ficha desde Mercado Público (${attempt}/6)…`);
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          setImportMsg(`Completando ficha desde Mercado Público (${attempt}/2)…`);
           const res = await fetch("/api/processes/import-codigo", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -92,7 +92,7 @@ export function DashboardFilters({
         }
         if (!filled) {
           setImportMsg(
-            "La fila ya está en el dashboard. Pulsa Completar ficha en la tabla; MP no entregó el detalle en este intento."
+            "La fila ya está en el dashboard. Usa Ver en MP para revisarla ahora; Completar ficha cuando la API responda."
           );
         }
         router.refresh();

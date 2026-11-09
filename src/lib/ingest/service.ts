@@ -39,6 +39,8 @@ import {
   MP_CA_KEYWORDS_PER_BATCH,
   MP_CA_CANDIDATE_MAX,
   MP_LICITACION_CANDIDATE_MAX,
+  vercelHttpBudgetMs,
+  isVercelRuntime,
 } from "@/lib/chilecompra/rate-limit";
 import { archiveStaleDashboardProcesses } from "@/lib/dashboard/archive-processes";
 
@@ -911,12 +913,13 @@ async function appendCompraAgilCandidates(
   const keywordPublicadoDesde = caKeywordSearchPublicadoDesdeIso();
   /** Listado reciente: siempre ventana 72 h (keywords y listado alineados). */
   const listingPublicadoDesde = keywordPublicadoDesde;
-  const mpAttempts = Math.max(1, Number.parseInt(process.env.MP_SYNC_MAX_ATTEMPTS ?? "2", 10) || 2);
-  const keywordAttempts = Math.max(
-    1,
-    Number.parseInt(process.env.MP_KEYWORD_MAX_ATTEMPTS ?? "1", 10) || 1
-  );
-  const mpFast = { maxAttempts: keywordAttempts };
+  const tightBudget = isVercelRuntime();
+  const mpTimeoutMs = tightBudget ? 5_500 : 8_000;
+  const mpAttempts = tightBudget
+    ? 1
+    : Math.max(1, Number.parseInt(process.env.MP_SYNC_MAX_ATTEMPTS ?? "2", 10) || 2);
+  const keywordAttempts = 1;
+  const mpFast = { maxAttempts: keywordAttempts, timeoutMs: mpTimeoutMs };
   const caEstados = "publicada,cerrada,proveedor_seleccionado,desierta,cancelada";
 
   const outOfTime = () =>
@@ -953,7 +956,7 @@ async function appendCompraAgilCandidates(
       ticket,
       listingPublicadoDesde,
       pageCount,
-        { maxAttempts: mpAttempts, estado: caEstados, startPage }
+        { maxAttempts: mpAttempts, estado: caEstados, startPage, timeoutMs: mpTimeoutMs }
     );
     if (verbose) {
       console.log(
@@ -978,11 +981,13 @@ async function appendCompraAgilCandidates(
     pending.ca_list_page = startPage + pageCount;
   };
 
-  const listingPagesThisPass = options?.perRequest
-    ? MANUAL_CA_LISTING_PAGES_PER_PASS
-    : pending.cron_run
-      ? CRON_CA_LISTING_PAGES_PER_RUN
-      : 3;
+  const listingPagesThisPass = tightBudget
+    ? 1
+    : options?.perRequest
+      ? MANUAL_CA_LISTING_PAGES_PER_PASS
+      : pending.cron_run
+        ? CRON_CA_LISTING_PAGES_PER_RUN
+        : 3;
 
   if (!outOfTime()) {
     try {
@@ -997,7 +1002,12 @@ async function appendCompraAgilCandidates(
   let keywordOffset = offset;
   let keywordBatchesThisCall = 0;
 
-  if (!pending.ca_keywords_skipped && keywordOffset < terms.length && !outOfTime()) {
+  if (
+    !tightBudget &&
+    !pending.ca_keywords_skipped &&
+    keywordOffset < terms.length &&
+    !outOfTime()
+  ) {
     try {
       do {
         if (verbose) {
@@ -1058,8 +1068,8 @@ async function finalizeDashboardSync(
       : (await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }))).archived;
 
   if (options?.caRollingPass && scope === "compra_agil") {
-    const incompleteLimit = pending.cron_run ? 5 : 2;
-    const staleLimit = pending.cron_run ? 4 : 0;
+    const incompleteLimit = pending.cron_run && !isVercelRuntime() ? 5 : 0;
+    const staleLimit = pending.cron_run && !isVercelRuntime() ? 4 : 0;
     const incomplete = await refreshIncompleteProcesses(incompleteLimit, notifyFilters, {
       markDashboardSync: true,
       notifyFilters,
@@ -1218,13 +1228,18 @@ export async function runFastManualSync(
     }
   }
 
-  const httpDeadline = Date.now() + MANUAL_SYNC_HTTP_BUDGET_MS;
+  const httpBudget = vercelHttpBudgetMs(MANUAL_SYNC_HTTP_BUDGET_MS);
+  const httpDeadline = Date.now() + httpBudget;
+  const minPassMs = isVercelRuntime() ? 3_000 : 12_000;
   let result: DashboardSyncBatchResult | null = null;
   let passes = 0;
 
   while (Date.now() < httpDeadline && passes < MANUAL_CA_PASSES_PER_HTTP) {
-    const batchMs = Math.min(MANUAL_SYNC_PASS_BUDGET_MS, httpDeadline - Date.now() - 2_000);
-    if (batchMs < 12_000) break;
+    const batchMs = Math.min(
+      isVercelRuntime() ? httpBudget : MANUAL_SYNC_PASS_BUDGET_MS,
+      httpDeadline - Date.now() - 500
+    );
+    if (batchMs < minPassMs) break;
 
     result = await runDashboardSyncBatch({
       continueBatch,
@@ -1245,7 +1260,7 @@ export async function runFastManualSync(
   }
 
   if (scope === "compra_agil") {
-    return { ...result, done: false, partial: false };
+    return { ...result, done: true, partial: true };
   }
 
   if (result.done) return result;
@@ -1410,15 +1425,17 @@ export async function recordCronFailure(message: string): Promise<void> {
 export async function runDashboardSyncCron(options?: {
   maxMs?: number;
 }): Promise<IngestSummary & { archived?: number; partial?: boolean }> {
-  const maxMs = options?.maxMs ?? 275_000;
-  const deadline = Date.now() + maxMs;
+  const cronBudget = options?.maxMs ?? vercelHttpBudgetMs(275_000);
+  const deadline = Date.now() + cronBudget;
   const supabase = createServiceClient();
 
-  await retryPendingMpImports(12).catch(() => undefined);
+  await retryPendingMpImports(isVercelRuntime() ? 1 : 12).catch(() => undefined);
 
-  const { archived: archivedAtStart } = await archiveStaleDashboardProcesses().catch(() => ({
-    archived: 0,
-  }));
+  const { archived: archivedAtStart } = isVercelRuntime()
+    ? { archived: 0 }
+    : await archiveStaleDashboardProcesses().catch(() => ({
+        archived: 0,
+      }));
 
   const summaries: Partial<Record<Exclude<SyncScope, "all">, IngestSummary>> = {};
   let partial = false;

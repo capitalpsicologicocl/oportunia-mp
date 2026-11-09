@@ -164,10 +164,10 @@ export function SyncMercadoPublicoButton({
       let rounds = 0;
       const maxRounds = 60;
       let timeoutRetries = 0;
-      const maxTimeoutRetries = 8;
+      const maxTimeoutRetries = 2;
       let lastData: SyncApiResponse | null = null;
 
-      const maxRoundsForScope = scope === "compra_agil" ? 12 : maxRounds;
+      const maxRoundsForScope = scope === "compra_agil" ? 1 : maxRounds;
 
       while (rounds < maxRoundsForScope) {
         rounds += 1;
@@ -195,9 +195,9 @@ export function SyncMercadoPublicoButton({
             continue;
           }
           if (isGatewayTimeout) {
-            continueBatch = true;
-            await new Promise((resolve) => setTimeout(resolve, 800));
-            continue;
+            throw new Error(
+              "Mercado Público no respondió a tiempo (límite de 10 s en Vercel). Revisa la CA en el buscador y vuelve a sincronizar más tarde."
+            );
           }
           throw new Error(
             `Respuesta inválida del servidor (${res.status}): ${raw.slice(0, 100)}`
@@ -254,8 +254,8 @@ export function SyncMercadoPublicoButton({
             : "actualización incremental";
 
       let suffix = "";
-      if (!data.done && scope === "compra_agil") {
-        suffix = ` · ${rounds} paso${rounds !== 1 ? "s" : ""} (rotación continua; puedes sincronizar de nuevo)`;
+      if (scope === "compra_agil") {
+        suffix = " · un paso (pulsa de nuevo para seguir el listado)";
       } else if (!data.done) {
         setError(
           "Sync parcial por tiempo. Pulsa Sincronizar otra vez para continuar (retoma automáticamente)."
@@ -355,7 +355,7 @@ export function SyncMercadoPublicoButton({
       {!isFirstSync && !loading && (
         <p className="text-xs text-muted-foreground">
           {isCa
-            ? "Sync: listado MP 72 h + keywords (rotación continua). Un clic ≈ 1 min."
+            ? "Un clic pide una página a Mercado Público (~10 s en Vercel). Si MP no responde, abre el código en el buscador para revisar."
             : "Sync en servidor: busca licitaciones recientes (~1–2 min). Cron nocturno ~01:00 CL."}
         </p>
       )}

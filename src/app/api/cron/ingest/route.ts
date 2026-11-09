@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { recordCronAttempt, recordCronFailure, runDashboardSyncCron } from "@/lib/ingest/service";
+import { vercelHttpBudgetMs } from "@/lib/chilecompra/rate-limit";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 10;
 
 /** Señales que Vercel envía al invocar Cron Jobs (varían según versión/plan). */
 function isVercelCronRequest(request: NextRequest): boolean {
@@ -43,7 +44,7 @@ async function handleCron(request: NextRequest) {
   await recordCronAttempt().catch(() => undefined);
 
   try {
-    const summary = await runDashboardSyncCron({ maxMs: 275_000 });
+    const summary = await runDashboardSyncCron({ maxMs: vercelHttpBudgetMs(275_000) });
     return NextResponse.json({ ok: true, summary });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Error desconocido";

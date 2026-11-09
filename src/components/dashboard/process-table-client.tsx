@@ -73,6 +73,13 @@ function SortHeader({
   );
 }
 
+function mpFichaUrl(p: Pick<ProcessRow, "url_publica" | "codigo_externo">): string {
+  return (
+    p.url_publica ||
+    `https://buscador.mercadopublico.cl/ficha?code=${encodeURIComponent(p.codigo_externo)}`
+  );
+}
+
 function rowTextClass(revision: ProcesoEstadoRevision, enCrm: boolean): string {
   if (revision === "descartada") return "font-normal text-muted-foreground/45";
   if (enCrm || revision === "revisada") return "font-normal text-muted-foreground";
@@ -164,22 +171,30 @@ export function ProcessTableClient({
   async function completeFicha(codigo: string, processId: string) {
     setRowBusy(processId);
     try {
-      for (let attempt = 1; attempt <= 6; attempt += 1) {
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
         const res = await fetch("/api/processes/import-codigo", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ codigo }),
         });
-        const data = (await res.json()) as { result?: string };
+        const raw = await res.text();
+        let data: { result?: string } = {};
+        try {
+          data = JSON.parse(raw) as { result?: string };
+        } catch {
+          data = {};
+        }
         if (data.result === "updated") {
           router.refresh();
           return;
         }
-        await new Promise((r) => setTimeout(r, 1200));
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 800));
       }
-      alert("Mercado Público aún no entrega esta ficha. Intenta Completar ficha de nuevo en un minuto.");
+      alert(
+        "Mercado Público no entregó la ficha. Ábrela con Ver en MP para revisarla ahora; Completar ficha se reintenta cuando la API responda."
+      );
     } catch {
-      alert("No se pudo completar la ficha ahora.");
+      alert("No se pudo completar la ficha ahora. Usa Ver en MP para revisarla en Mercado Público.");
     } finally {
       setRowBusy(null);
       router.refresh();
@@ -487,8 +502,8 @@ export function ProcessTableClient({
                 />
               </TableHead>
               <TableHead className={`${showTipoColumn ? "w-[10%]" : "w-[9%]"} px-2 text-center`}>Código</TableHead>
-              <TableHead className={`${showTipoColumn ? "w-[22%]" : "w-[23%]"} px-2 text-center`}>Nombre</TableHead>
-              {!isDiscarded && <TableHead className="w-[5%] px-1 text-center">Rev.</TableHead>}
+              <TableHead className={`${showTipoColumn ? "w-[20%]" : "w-[21%]"} px-2 text-center`}>Nombre</TableHead>
+              {!isDiscarded && <TableHead className="w-[8%] px-1 text-center">Rev.</TableHead>}
               {isDiscarded && <TableHead className="w-[6%] px-1 text-center">Acción</TableHead>}
               {showTipoColumn && <TableHead className="w-[7%] px-2 text-center">Tipo</TableHead>}
               <TableHead className={`${showTipoColumn ? "w-[8%]" : "w-[9%]"} px-2 text-center`}>
@@ -512,6 +527,7 @@ export function ProcessTableClient({
             {processes.map((p) => {
               const revision = getRevision(p);
               const textClass = rowTextClass(revision, p.en_crm);
+              const pendingFicha = p.estado === "pendiente_sync";
               const crmCol = (p.crm_columna ?? "preevaluacion") as KanbanColumna;
               const crmRowClass =
                 p.en_crm && !p.adjudicado_a_mi ? CRM_ROW_CLASS[crmCol] : undefined;
@@ -541,10 +557,7 @@ export function ProcessTableClient({
                   </TableCell>
                   <TableCell className={`truncate px-2 font-mono text-[10px] ${textClass}`}>
                     <a
-                      href={
-                        p.url_publica ||
-                        `https://buscador.mercadopublico.cl/ficha?code=${encodeURIComponent(p.codigo_externo)}`
-                      }
+                      href={mpFichaUrl(p)}
                       target="_blank"
                       rel="noreferrer"
                       className="hover:text-[#d4a017] hover:underline"
@@ -552,7 +565,7 @@ export function ProcessTableClient({
                       {p.codigo_externo}
                     </a>
                   </TableCell>
-                  <TableCell className="px-2">
+                  <TableCell className="whitespace-normal px-2">
                     <HoverTooltip text={p.nombre}>
                       <p className={`line-clamp-2 cursor-help text-center text-[11px] leading-tight ${textClass}`}>
                         {p.nombre}
@@ -571,21 +584,9 @@ export function ProcessTableClient({
                         Adjud. tuyo
                       </Badge>
                     )}
-                    {p.estado === "pendiente_sync" && (
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="brand"
-                        className="mt-1 h-6 px-2 text-[10px]"
-                        disabled={rowBusy === p.id}
-                        onClick={() => completeFicha(p.codigo_externo, p.id)}
-                      >
-                        {rowBusy === p.id ? "Completando…" : "Completar ficha"}
-                      </Button>
-                    )}
                   </TableCell>
                   {isDiscarded ? (
-                    <TableCell className="px-1">
+                    <TableCell className="whitespace-normal px-1">
                       <Button
                         type="button"
                         size="xs"
@@ -598,30 +599,54 @@ export function ProcessTableClient({
                       </Button>
                     </TableCell>
                   ) : (
-                    <TableCell className="px-1">
-                      <div className="flex flex-col items-center gap-0.5">
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="outline"
-                          className="h-5 min-w-[2rem] px-1 text-[9px] font-semibold"
-                          disabled={rowBusy === p.id || revision === "revisada"}
-                          title="Marcar como revisada"
-                          onClick={() => markReviewed(p.id)}
-                        >
-                          REV
-                        </Button>
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="outline"
-                          className="h-5 min-w-[2rem] px-1 text-[9px] font-semibold hover:border-destructive hover:text-destructive"
-                          disabled={rowBusy === p.id}
-                          title="Descartar"
-                          onClick={() => discardToHistorial(p.id)}
-                        >
-                          DESC
-                        </Button>
+                    <TableCell className="relative z-10 whitespace-normal px-1 align-top">
+                      <div className="flex flex-col items-stretch gap-1">
+                        {pendingFicha && (
+                          <>
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="brand"
+                              className="h-auto min-h-6 w-full whitespace-normal px-1 py-1 text-[9px] leading-tight"
+                              disabled={rowBusy === p.id}
+                              onClick={() => completeFicha(p.codigo_externo, p.id)}
+                            >
+                              {rowBusy === p.id ? "Completando…" : "Completar ficha"}
+                            </Button>
+                            <a
+                              href={mpFichaUrl(p)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-center text-[9px] font-medium text-[#11233d] underline hover:text-[#d4a017]"
+                            >
+                              Ver en MP
+                            </a>
+                          </>
+                        )}
+                        <div className="flex justify-center gap-0.5">
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            className="h-5 min-w-[2rem] px-1 text-[9px] font-semibold"
+                            disabled={rowBusy === p.id || revision === "revisada"}
+                            title="Marcar como revisada"
+                            onClick={() => markReviewed(p.id)}
+                          >
+                            REV
+                          </Button>
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            className="h-5 min-w-[2rem] px-1 text-[9px] font-semibold hover:border-destructive hover:text-destructive"
+                            disabled={rowBusy === p.id}
+                            title="Descartar"
+                            onClick={() => discardToHistorial(p.id)}
+                          >
+                            DESC
+                          </Button>
+                        </div>
                       </div>
                     </TableCell>
                   )}
