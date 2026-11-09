@@ -23,7 +23,12 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await importProcessByCodigo(codigo, { force: true, queueIfMissing: true });
+    const result = await importProcessByCodigo(codigo, {
+      force: true,
+      queueIfMissing: true,
+      fast: true,
+      timeoutMs: 8_000,
+    });
     revalidatePath("/compra-agil");
     revalidatePath("/licitaciones");
 
@@ -36,9 +41,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ ok: true, result, message, codigo });
   } catch (error) {
-    await importProcessByCodigo(codigo, { force: true, queueIfMissing: true }).catch(
-      () => undefined
-    );
     const errMessage = error instanceof Error ? error.message : "Error desconocido";
     return NextResponse.json({
       ok: true,

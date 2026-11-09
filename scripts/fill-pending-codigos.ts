@@ -19,7 +19,7 @@ async function main() {
     const result = await importProcessByCodigo(codigo, {
       force: true,
       queueIfMissing: true,
-      fast: true,
+      fast: false,
       timeoutMs: 20_000,
     });
     console.log(codigo, result);
