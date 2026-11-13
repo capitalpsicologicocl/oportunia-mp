@@ -147,16 +147,16 @@ export async function renderTipoDashboard({
           cronMpError={syncStatus.cronMpError}
         />
 
-        {syncStatus.hasSyncedData && (
-          <>
-            <Suspense fallback={<div className="h-24 animate-pulse rounded-xl bg-muted" />}>
-              <DashboardFilters
-                basePath={basePath}
-                regionOptions={dashboard.filterOptions.regiones}
-                organismoOptions={dashboard.filterOptions.organismos}
-              />
-            </Suspense>
+        <Suspense fallback={<div className="h-24 animate-pulse rounded-xl bg-muted" />}>
+          <DashboardFilters
+            basePath={basePath}
+            regionOptions={dashboard.filterOptions.regiones}
+            organismoOptions={dashboard.filterOptions.organismos}
+          />
+        </Suspense>
 
+        {syncStatus.hasSyncedData ? (
+          <>
             <Suspense fallback={<div className="h-64 animate-pulse rounded-xl bg-muted" />}>
               <ProcessTableClient
                 processes={dashboard.processes}
@@ -173,12 +173,13 @@ export async function renderTipoDashboard({
               total={dashboard.total}
             />
           </>
-        )}
-
-        {!syncStatus.hasSyncedData && (
+        ) : (
           <div className="brand-card space-y-3 p-12 text-center">
             <p className="text-lg font-semibold text-[#11233d]">Sin datos aún</p>
             <p className="mx-auto max-w-lg text-sm text-muted-foreground">{emptyHint}</p>
+            <p className="mx-auto max-w-lg text-sm text-muted-foreground">
+              También puedes pegar un código arriba en Importar de Mercado Público.
+            </p>
           </div>
         )}
       </main>

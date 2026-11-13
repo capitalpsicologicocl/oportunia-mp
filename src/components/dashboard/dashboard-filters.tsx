@@ -33,6 +33,7 @@ export function DashboardFilters({
   const [isPending, startTransition] = useTransition();
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [importCodigo, setImportCodigo] = useState("");
 
   const q = searchParams.get("q") ?? "";
   const filtro = searchParams.get("filtro") ?? "ambos";
@@ -56,52 +57,64 @@ export function DashboardFilters({
     [router, searchParams, basePath]
   );
 
-  async function applySearch(rawQ: string) {
-    const value = rawQ.trim();
+  async function importFromMercadoPublico(rawCodigo: string) {
+    const value = rawCodigo.trim();
     setImportMsg(null);
-    if (looksLikeProcessCodigo(value)) {
-      setImporting(true);
-      try {
-        await fetch("/api/processes/enqueue-codigo", {
+    if (!looksLikeProcessCodigo(value)) {
+      setImportMsg("Ingresa un código de Mercado Público, por ejemplo 2583-876-COT26 o 898-141-LE26.");
+      return;
+    }
+
+    setImporting(true);
+    try {
+      await fetch("/api/processes/enqueue-codigo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ codigo: value }),
+      });
+      updateParams({ q: value });
+      let filled = false;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        setImportMsg(`Importando ficha desde Mercado Público (${attempt}/2)…`);
+        const res = await fetch("/api/processes/import-codigo", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ codigo: value }),
         });
-        updateParams({ q: value });
-        let filled = false;
-        for (let attempt = 1; attempt <= 2; attempt += 1) {
-          setImportMsg(`Completando ficha desde Mercado Público (${attempt}/2)…`);
-          const res = await fetch("/api/processes/import-codigo", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ codigo: value }),
-          });
-          const raw = await res.text();
-          let data: { message?: string; result?: string } = {};
-          try {
-            data = JSON.parse(raw) as { message?: string; result?: string };
-          } catch {
-            data = {};
-          }
-          if (data.result === "updated") {
-            filled = true;
-            setImportMsg("Ficha importada. Ya puedes revisarla.");
-            break;
-          }
-          await new Promise((r) => setTimeout(r, 1200));
+        const raw = await res.text();
+        let data: { message?: string; result?: string } = {};
+        try {
+          data = JSON.parse(raw) as { message?: string; result?: string };
+        } catch {
+          data = {};
         }
-        if (!filled) {
-          setImportMsg(
-            "La fila ya está en el dashboard. Usa Ver en MP para revisarla ahora; Completar ficha cuando la API responda."
-          );
+        if (data.result === "updated") {
+          filled = true;
+          setImportMsg("Ficha importada desde Mercado Público. Ya puedes revisarla.");
+          break;
         }
-        router.refresh();
-      } catch {
-        setImportMsg("Código anotado. Si no ves la fila, pulsa Aplicar de nuevo en unos segundos.");
-        updateParams({ q: value });
-      } finally {
-        setImporting(false);
+        await new Promise((r) => setTimeout(r, 1200));
       }
+      if (!filled) {
+        setImportMsg(
+          "El código quedó en el dashboard. Si la ficha sigue vacía, ábrela en MP o reintenta Importar en un minuto."
+        );
+      }
+      router.refresh();
+    } catch {
+      setImportMsg("No se pudo contactar el servidor. Reintenta Importar.");
+      updateParams({ q: value });
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function applySearch(rawQ: string) {
+    const value = rawQ.trim();
+    setImportMsg(null);
+    if (looksLikeProcessCodigo(value)) {
+      setImportCodigo(value);
+      await importFromMercadoPublico(value);
       return;
     }
     updateParams({ q: value });
@@ -238,9 +251,36 @@ export function DashboardFilters({
         </Button>
       </div>
 
+      <div className="flex flex-wrap items-end gap-3 border-t border-[#11233d]/10 pt-3">
+        <div className="min-w-[240px] flex-1 space-y-1">
+          <Label htmlFor="import-codigo">Importar de Mercado Público</Label>
+          <Input
+            id="import-codigo"
+            value={importCodigo}
+            onChange={(e) => setImportCodigo(e.target.value)}
+            placeholder="Código CA o licitación, ej. 2583-876-COT26 / 898-141-LE26"
+            disabled={importing}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void importFromMercadoPublico(importCodigo);
+              }
+            }}
+          />
+        </div>
+        <Button
+          type="button"
+          variant="brand"
+          disabled={isPending || importing}
+          onClick={() => void importFromMercadoPublico(importCodigo)}
+        >
+          {importing ? "Importando…" : "Importar ficha"}
+        </Button>
+      </div>
+
       {importMsg && <p className="text-xs text-[#11233d]">{importMsg}</p>}
       <p className="text-xs text-muted-foreground">
-        Si pegas un código (ej. 2583-876-COT26) se importa aunque MP esté lento; el cron lo completa solo.
+        Importar trae la ficha desde Mercado Público (Compra Ágil o licitación) y la deja en este dashboard.
         Filtro activo:{" "}
         {filtro === "ambos"
           ? "procesos que coinciden con alguna keyword O algún rubro tuyo"

@@ -502,7 +502,7 @@ export function ProcessTableClient({
                 />
               </TableHead>
               <TableHead className={`${showTipoColumn ? "w-[10%]" : "w-[9%]"} px-2 text-center`}>Código</TableHead>
-              <TableHead className={`${showTipoColumn ? "w-[20%]" : "w-[21%]"} px-2 text-center`}>Nombre</TableHead>
+              <TableHead className={`${showTipoColumn ? "w-[20%]" : "w-[21%]"} px-2 text-left`}>Nombre</TableHead>
               {!isDiscarded && <TableHead className="w-[8%] px-1 text-center">Rev.</TableHead>}
               {isDiscarded && <TableHead className="w-[6%] px-1 text-center">Acción</TableHead>}
               {showTipoColumn && <TableHead className="w-[7%] px-2 text-center">Tipo</TableHead>}
@@ -565,15 +565,15 @@ export function ProcessTableClient({
                       {p.codigo_externo}
                     </a>
                   </TableCell>
-                  <TableCell className="whitespace-normal px-2">
+                  <TableCell className="whitespace-normal px-2 text-left">
                     <HoverTooltip text={p.nombre}>
-                      <p className={`line-clamp-2 cursor-help text-center text-[11px] leading-tight ${textClass}`}>
+                      <p className={`line-clamp-2 cursor-help text-left text-[11px] leading-tight ${textClass}`}>
                         {p.nombre}
                       </p>
                     </HoverTooltip>
                     {organismoSubtitle && (
                       <p
-                        className={`mt-0.5 line-clamp-1 text-center text-[9px] leading-tight text-muted-foreground ${revision === "descartada" ? "opacity-50" : ""}`}
+                        className={`mt-0.5 line-clamp-1 text-left text-[9px] leading-tight text-muted-foreground ${revision === "descartada" ? "opacity-50" : ""}`}
                         title={organismoSubtitle}
                       >
                         {organismoSubtitle}
