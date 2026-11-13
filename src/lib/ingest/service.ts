@@ -914,7 +914,7 @@ async function appendCompraAgilCandidates(
   /** Listado reciente: siempre ventana 72 h (keywords y listado alineados). */
   const listingPublicadoDesde = keywordPublicadoDesde;
   const tightBudget = isVercelRuntime();
-  const mpTimeoutMs = tightBudget ? 5_500 : 8_000;
+  const mpTimeoutMs = tightBudget ? 8_000 : 12_000;
   const mpAttempts = tightBudget
     ? 1
     : Math.max(1, Number.parseInt(process.env.MP_SYNC_MAX_ATTEMPTS ?? "2", 10) || 2);
@@ -965,9 +965,21 @@ async function appendCompraAgilCandidates(
       );
     }
     if (listing.apiError) {
-      onError(`Compra ágil (listado reciente): ${listing.apiError}`);
-      return;
+      const fallback = await fetchCompraAgilPublishedSince(
+        ticket,
+        listingPublicadoDesde,
+        1,
+        { maxAttempts: 1, startPage: 1, timeoutMs: mpTimeoutMs, region: 13 }
+      );
+      if (fallback.apiError || fallback.items.length === 0) {
+        onError(`Compra ágil (listado reciente): ${listing.apiError}`);
+        return;
+      }
+      listing.items.push(...fallback.items);
+      listing.totalPages = fallback.totalPages;
+      listing.apiError = undefined;
     }
+    pending.errors = pending.errors.filter((e) => !/listado reciente/i.test(e));
     pending.ca_listing_total_pages = listing.totalPages;
     const normalizedList = listing.items.map((raw) => normalizeCompraAgil(raw));
     await upsertDiscoveredCaBatch(
@@ -1230,7 +1242,7 @@ export async function runFastManualSync(
 
   const httpBudget = vercelHttpBudgetMs(MANUAL_SYNC_HTTP_BUDGET_MS);
   const httpDeadline = Date.now() + httpBudget;
-  const minPassMs = isVercelRuntime() ? 3_000 : 12_000;
+  const minPassMs = isVercelRuntime() ? 4_000 : 12_000;
   let result: DashboardSyncBatchResult | null = null;
   let passes = 0;
 
@@ -1330,7 +1342,9 @@ export async function runDashboardSyncBatch(
       lastSyncAt,
       {
         perRequest: Boolean(options.maxBatchMs && options.maxBatchMs <= 60_000),
-        deadlineMs: Date.now() + batchBudgetMs - 8_000,
+        deadlineMs:
+          Date.now() +
+          Math.max(4_000, batchBudgetMs - (isVercelRuntime() ? 500 : 8_000)),
         serverSide: options.serverSide,
       },
       orgRut

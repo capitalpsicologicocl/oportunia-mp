@@ -572,7 +572,13 @@ export async function fetchCompraAgilPublishedSince(
   ticket: string,
   publicadoDesdeIso: string,
   maxPages = 6,
-  options?: { maxAttempts?: number; estado?: string; startPage?: number; timeoutMs?: number }
+  options?: {
+    maxAttempts?: number;
+    estado?: string;
+    startPage?: number;
+    timeoutMs?: number;
+    region?: number;
+  }
 ): Promise<CompraAgilPublishedSinceResult> {
   const items: unknown[] = [];
   const startPage = Math.max(1, options?.startPage ?? 1);
@@ -584,13 +590,17 @@ export async function fetchCompraAgilPublishedSince(
 
   while (page <= totalPages && page <= endPage) {
     try {
+      const publicadoDesde = publicadoDesdeIso.includes("T")
+        ? publicadoDesdeIso
+        : `${publicadoDesdeIso}T00:00:00Z`;
       const params: Record<string, string | number> = {
-        publicado_desde: publicadoDesdeIso,
-        tamano_pagina: 50,
+        publicado_desde: publicadoDesde,
+        tamano_pagina: 15,
         numero_pagina: page,
         ordenar_por: "FechaPublicacion",
       };
       if (options?.estado) params.estado = options.estado;
+      if (options?.region) params.region = options.region;
 
       const data = await fetchApi2<CompraAgilListResponse>(
         "/v2/compra-agil",
@@ -723,25 +733,6 @@ async function fetchCompraAgilListItemByCodigo(
   const timeoutMs = options?.timeoutMs ?? 7_000;
 
   try {
-    const data = await fetchApi2<CompraAgilListResponse>(
-      "/v2/compra-agil",
-      ticket,
-      {
-        q: trimmed,
-        tamano_pagina: 50,
-        numero_pagina: 1,
-      },
-      { maxAttempts, timeoutMs }
-    );
-    const match = matchCompraAgilByCodigo(data, trimmed);
-    if (match) return match;
-  } catch {
-    /* q= timeout */
-  }
-
-  if (options?.includeId === false) return null;
-
-  try {
     const byId = await fetchApi2<CompraAgilListResponse>(
       "/v2/compra-agil",
       ticket,
@@ -752,6 +743,25 @@ async function fetchCompraAgilListItemByCodigo(
     if (idMatch) return idMatch;
   } catch {
     /* id= timeout */
+  }
+
+  if (options?.includeId === false) return null;
+
+  try {
+    const data = await fetchApi2<CompraAgilListResponse>(
+      "/v2/compra-agil",
+      ticket,
+      {
+        q: trimmed,
+        tamano_pagina: 15,
+        numero_pagina: 1,
+      },
+      { maxAttempts, timeoutMs }
+    );
+    const match = matchCompraAgilByCodigo(data, trimmed);
+    if (match) return match;
+  } catch {
+    /* q= timeout */
   }
 
   return null;
