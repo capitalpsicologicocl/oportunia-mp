@@ -935,11 +935,13 @@ async function appendCompraAgilCandidates(
 
   const terms = pending.ca_search_terms;
   const offset = pending.ca_term_offset ?? 0;
-  const keywordBatchSize = options?.perRequest
-    ? MANUAL_FAST_KEYWORD_BATCH
-    : pending.cron_run
-      ? CRON_CA_KEYWORDS_PER_BATCH
-      : MP_CA_KEYWORDS_PER_BATCH;
+  const keywordBatchSize = tightBudget
+    ? 1
+    : options?.perRequest
+      ? MANUAL_FAST_KEYWORD_BATCH
+      : pending.cron_run
+        ? CRON_CA_KEYWORDS_PER_BATCH
+        : MP_CA_KEYWORDS_PER_BATCH;
   const pagesPerKeyword = options?.perRequest ? 1 : MP_CA_PAGES_PER_KEYWORD;
 
   if (pending.cron_run && discoverMode === "nightly") {
@@ -955,8 +957,16 @@ async function appendCompraAgilCandidates(
     const listing = await fetchCompraAgilPublishedSince(
       ticket,
       listingPublicadoDesde,
-      pageCount,
-        { maxAttempts: mpAttempts, estado: caEstados, startPage, timeoutMs: mpTimeoutMs }
+      tightBudget ? 1 : pageCount,
+      tightBudget
+        ? {
+            maxAttempts: 1,
+            estado: "publicada",
+            startPage: 1,
+            timeoutMs: mpTimeoutMs,
+            region: 13,
+          }
+        : { maxAttempts: mpAttempts, estado: caEstados, startPage, timeoutMs: mpTimeoutMs }
     );
     if (verbose) {
       console.log(
@@ -1014,12 +1024,7 @@ async function appendCompraAgilCandidates(
   let keywordOffset = offset;
   let keywordBatchesThisCall = 0;
 
-  if (
-    !tightBudget &&
-    !pending.ca_keywords_skipped &&
-    keywordOffset < terms.length &&
-    !outOfTime()
-  ) {
+  if (!pending.ca_keywords_skipped && keywordOffset < terms.length && !outOfTime()) {
     try {
       do {
         if (verbose) {
@@ -1443,7 +1448,9 @@ export async function runDashboardSyncCron(options?: {
   const deadline = Date.now() + cronBudget;
   const supabase = createServiceClient();
 
-  await retryPendingMpImports(isVercelRuntime() ? 1 : 12).catch(() => undefined);
+  if (!isVercelRuntime()) {
+    await retryPendingMpImports(12).catch(() => undefined);
+  }
 
   const { archived: archivedAtStart } = isVercelRuntime()
     ? { archived: 0 }
@@ -1481,8 +1488,14 @@ export async function runDashboardSyncCron(options?: {
     if (scopeDone[scope]) continue;
 
     const remainingMs = deadline - Date.now();
-    const batchMs = scope === "compra_agil" ? Math.min(150_000, remainingMs - 5_000) : Math.min(90_000, remainingMs - 5_000);
-    if (batchMs < 20_000) break;
+    const reserveMs = isVercelRuntime() ? 400 : 5_000;
+    const minBatchMs = isVercelRuntime() ? 3_000 : 20_000;
+    const batchMs = isVercelRuntime()
+      ? remainingMs - reserveMs
+      : scope === "compra_agil"
+        ? Math.min(150_000, remainingMs - reserveMs)
+        : Math.min(90_000, remainingMs - reserveMs);
+    if (batchMs < minBatchMs) break;
 
     const result = await runDashboardSyncBatch({
       continueBatch: continueBatchByScope[scope],
@@ -1540,9 +1553,11 @@ export async function runDashboardSyncCron(options?: {
     }
   }
 
-  const { archived: archivedAtEnd } = await archiveStaleDashboardProcesses().catch(() => ({
-    archived: 0,
-  }));
+  const { archived: archivedAtEnd } = isVercelRuntime()
+    ? { archived: 0 }
+    : await archiveStaleDashboardProcesses().catch(() => ({
+        archived: 0,
+      }));
   const archived = archivedAtStart + archivedAtEnd;
 
   const ca = summaries.compra_agil;
