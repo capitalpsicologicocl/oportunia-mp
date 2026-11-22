@@ -366,7 +366,13 @@ async function upsertProcess(
     .eq("codigo_externo", normalized.codigo_externo)
     .maybeSingle();
 
-  if (existing?.dashboard_archived_at && !options?.forceRefresh) {
+  const reopenArchived =
+    Boolean(existing?.dashboard_archived_at) &&
+    Boolean(options?.markDashboardSync) &&
+    !isPastCierre(normalized.fecha_cierre, normalized.hora_cierre) &&
+    !isTerminalMpEstado(normalized.estado ?? "");
+
+  if (existing?.dashboard_archived_at && !options?.forceRefresh && !reopenArchived) {
     return "updated";
   }
 
@@ -415,7 +421,7 @@ async function upsertProcess(
       : (existing?.synced_via_dashboard ?? false),
   };
 
-  if (options?.forceRefresh) {
+  if (options?.forceRefresh || reopenArchived) {
     row.dashboard_archived_at = null;
   }
 
@@ -811,7 +817,15 @@ async function filterCandidatesNeedingSync(
     const row = byCode.get(c.codigo_externo);
     if (!row) return true;
 
-    if (row.dashboard_archived_at) return false;
+    if (row.dashboard_archived_at) {
+      if (
+        isPastCierre(row.fecha_cierre, null) ||
+        isTerminalMpEstado(row.estado ?? "")
+      ) {
+        return false;
+      }
+      return true;
+    }
 
     return processNeedsApiRefresh({
       estado: row.estado,
@@ -906,10 +920,9 @@ async function appendCompraAgilCandidates(
   const supabase = createServiceClient();
   const beforeLen = pending.candidates.length;
   const seen = new Set(pending.candidates.map((c) => c.codigo_externo));
+  pending.errors = pending.errors.filter((e) => !/listado reciente|no respondió/i.test(e));
   const discoverMode = pending.ca_discover_mode ?? "incremental";
-  const publicadoDesde =
-    pending.ca_publicado_desde ?? compraAgilPublicadoDesdeIso(lastSyncAt, discoverMode);
-  pending.ca_publicado_desde = publicadoDesde;
+  pending.ca_publicado_desde = compraAgilPublicadoDesdeIso(lastSyncAt, discoverMode);
   const keywordPublicadoDesde = caKeywordSearchPublicadoDesdeIso();
   /** Listado reciente: siempre ventana 72 h (keywords y listado alineados). */
   const listingPublicadoDesde = keywordPublicadoDesde;
@@ -1078,11 +1091,12 @@ async function finalizeDashboardSync(
 ): Promise<DashboardSyncBatchResult> {
   const skipArchiveForManualCaPass =
     options?.caRollingPass && scope === "compra_agil" && !pending.cron_run;
-  const archived = skipArchiveForManualCaPass
-    ? 0
-    : options?.fast
-      ? (options.preArchived ?? 0)
-      : (await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }))).archived;
+  const archived =
+    isVercelRuntime() || skipArchiveForManualCaPass
+      ? 0
+      : options?.fast
+        ? (options.preArchived ?? 0)
+        : (await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }))).archived;
 
   if (options?.caRollingPass && scope === "compra_agil") {
     const incompleteLimit = pending.cron_run && !isVercelRuntime() ? 5 : 0;
@@ -1294,6 +1308,7 @@ export async function runDashboardSyncBatch(
 
   const notifyFilters = await loadOrgContentFilters();
   let pending = continueBatch ? await loadMpSyncPending(supabase, scope) : null;
+  if (pending && !cron) pending.cron_run = false;
 
   if (pending && pending.ca_fetched === undefined) {
     pending.ca_fetched = scope === "licitacion";
@@ -1311,7 +1326,7 @@ export async function runDashboardSyncBatch(
 
   if (!pending) {
     await closeStaleSyncRuns(supabase);
-    if (!continueBatch) {
+    if (!continueBatch && !isVercelRuntime()) {
       await archiveStaleDashboardProcesses().catch(() => ({ archived: 0 }));
     }
     if (scope === "compra_agil") {
@@ -1331,7 +1346,9 @@ export async function runDashboardSyncBatch(
       pending.errors = discoverErrors;
     }
     await saveMpSyncPending(supabase, scope, pending);
-    return buildBatchResult(pending, false, scope === "compra_agil" ? "compra_agil" : "discover");
+    if (!(isVercelRuntime() && scope === "compra_agil")) {
+      return buildBatchResult(pending, false, scope === "compra_agil" ? "compra_agil" : "discover");
+    }
   }
 
   if (scope === "compra_agil" && !pending.ca_fetched) {
