@@ -1,5 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
-import { isExcluded, keywordMatchesInText, normalizeMatchText } from "@/lib/dashboard/content-match";
+import { isExcluded, matchesInclusionKeywords, normalizeMatchText } from "@/lib/dashboard/content-match";
 import { matchesRubrosUnspsc } from "@/lib/dashboard/unspsc-match";
 import { normalizeOrgRubros, unspscCodesForMatching } from "@/lib/onboarding/rubros-unspsc";
 import { DEFAULT_ORG_ID } from "@/types/database";
@@ -28,7 +28,7 @@ export function buildProcessSearchText(
 }
 
 function matchesKeywords(text: string, keywords: string[]): boolean {
-  return keywords.some((k) => keywordMatchesInText(text, k));
+  return matchesInclusionKeywords(text, keywords);
 }
 
 function matchesRubros(text: string, rubros: Array<{ nombre: string }>): boolean {
@@ -51,7 +51,7 @@ export function matchesOrgContentFilters(
     matchesRubrosUnspsc(unspscCodigos ?? [], unspscCodesForMatching(rubros));
   if (keywords.length === 0) return byRubro || byUnspsc;
   if (rubros.length === 0) return byKeyword;
-  return byKeyword || byRubro || byUnspsc;
+  return byKeyword || byRubro;
 }
 
 export function isProcessRelevant(

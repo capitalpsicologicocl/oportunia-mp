@@ -43,7 +43,7 @@ export const KEYWORD_TEMPLATE = [
   { categoria: "Facilitación", palabra: "relatoría" },
   { categoria: "Facilitación", palabra: "relator" },
   { categoria: "Facilitación", palabra: "transcripción" },
-  { categoria: "Facilitación", palabra: "monitoreo" },
+  { categoria: "Facilitación", palabra: "monitoreo de aprendizaje" },
   { categoria: "Facilitación", palabra: "facilitador" },
   { categoria: "Facilitación", palabra: "diseño instruccional" },
   { categoria: "Facilitación", palabra: "material didáctico" },

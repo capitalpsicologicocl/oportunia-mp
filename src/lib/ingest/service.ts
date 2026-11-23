@@ -5,8 +5,8 @@ import {
   loadOrgContentFilters,
   matchesOrgContentFilters,
 } from "@/lib/dashboard/process-relevance";
-import { isExcluded } from "@/lib/dashboard/content-match";
-import { extractRubroSearchTerms } from "@/lib/onboarding/rubros-unspsc";
+import { isAmbiguousKeyword, isExcluded } from "@/lib/dashboard/content-match";
+import { extractRubroSearchTerms, isWeakSearchToken } from "@/lib/onboarding/rubros-unspsc";
 import { looksLikeProcessCodigo } from "@/lib/dashboard/process-codigo";
 import { isTerminalMpEstado, processNeedsApiRefresh, type SyncScope } from "@/lib/ingest/sync-refresh";
 import { DEFAULT_ORG_ID, type DashboardSyncBatchResult, type IngestSummary, type ProcessInsert, type ProcessTipo } from "@/types/database";
@@ -469,13 +469,46 @@ function buildCompraAgilSearchTerms(
   keywords: string[],
   rubros: Array<{ nombre: string }>
 ): string[] {
-  const rubroTerms = extractRubroSearchTerms(rubros);
   const keywordTerms: string[] = [];
   for (const keyword of keywords) {
     const normalized = stripAccents(keyword).trim().toLowerCase();
-    if (normalized.length >= 3) keywordTerms.push(normalized);
+    if (
+      normalized.length >= 3 &&
+      !isAmbiguousKeyword(normalized) &&
+      !isWeakSearchToken(normalized)
+    ) {
+      keywordTerms.push(normalized);
+    }
   }
-  return [...new Set([...rubroTerms, ...keywordTerms])];
+  const rubroTerms = extractRubroSearchTerms(rubros).filter(
+    (term) => !isAmbiguousKeyword(term) && !isWeakSearchToken(term)
+  );
+  return [...new Set([...keywordTerms, ...rubroTerms])].slice(0, 36);
+}
+
+function refreshCaSearchTerms(
+  pending: MpSyncPending,
+  keywords: string[],
+  rubros: Array<{ nombre: string }>
+) {
+  const next = buildCompraAgilSearchTerms(keywords, rubros);
+  const prev = pending.ca_search_terms;
+  const offset = pending.ca_term_offset ?? 0;
+  const prevTerm = prev?.[offset];
+  pending.ca_search_terms = next;
+  if (!prev?.length || prev.join("\0") !== next.join("\0")) {
+    const idx = prevTerm ? next.indexOf(prevTerm) : -1;
+    pending.ca_term_offset = idx >= 0 ? idx : 0;
+  }
+}
+
+function caQueueShouldReset(pending: MpSyncPending | null): boolean {
+  if (!pending || pending.finalized) return true;
+  if ((pending.ca_search_terms?.length ?? 0) > 40) return true;
+  const mpDead =
+    pending.errors.some((e) => /no respondió|timeout|504|503|502/i.test(e)) &&
+    pending.candidates.length === 0;
+  return mpDead;
 }
 
 type CaDiscoverMode = "initial" | "incremental" | "nightly";
@@ -927,7 +960,7 @@ async function appendCompraAgilCandidates(
   /** Listado reciente: siempre ventana 72 h (keywords y listado alineados). */
   const listingPublicadoDesde = keywordPublicadoDesde;
   const tightBudget = isVercelRuntime();
-  const mpTimeoutMs = tightBudget ? 8_000 : 12_000;
+  const mpTimeoutMs = tightBudget ? 4_500 : 12_000;
   const mpAttempts = tightBudget
     ? 1
     : Math.max(1, Number.parseInt(process.env.MP_SYNC_MAX_ATTEMPTS ?? "2", 10) || 2);
@@ -938,15 +971,9 @@ async function appendCompraAgilCandidates(
   const outOfTime = () =>
     options?.deadlineMs !== undefined && Date.now() >= options.deadlineMs;
 
-  if (!pending.ca_search_terms?.length) {
-    pending.ca_search_terms = buildCompraAgilSearchTerms(
-      notifyFilters.keywords,
-      notifyFilters.rubros
-    );
-    pending.ca_term_offset = pending.ca_term_offset ?? 0;
-  }
+  refreshCaSearchTerms(pending, notifyFilters.keywords, notifyFilters.rubros);
 
-  const terms = pending.ca_search_terms;
+  const terms = pending.ca_search_terms ?? [];
   const offset = pending.ca_term_offset ?? 0;
   const keywordBatchSize = tightBudget
     ? 1
@@ -1016,21 +1043,8 @@ async function appendCompraAgilCandidates(
     pending.ca_list_page = startPage + pageCount;
   };
 
-  const listingPagesThisPass = tightBudget
-    ? 1
-    : options?.perRequest
-      ? MANUAL_CA_LISTING_PAGES_PER_PASS
-      : pending.cron_run
-        ? CRON_CA_LISTING_PAGES_PER_RUN
-        : 3;
-
-  if (!outOfTime()) {
-    try {
-      await runListingSlice(listingPagesThisPass);
-    } catch (err) {
-      onError(`Compra ágil (listado reciente): ${err instanceof Error ? err.message : "Error"}`);
-    }
-  }
+  /** El listado sin `q=` trae CA de cualquier rubro (CFT, oficina, insumos) que coinciden por UNSPSC. */
+  const listingPagesThisPass = 0;
 
   const multiKeywordBatch =
     !options?.perRequest && (pending.cron_run || options?.serverSide === true);
@@ -1073,6 +1087,14 @@ async function appendCompraAgilCandidates(
     }
   } else if (pending.ca_keywords_skipped && keywordOffset < terms.length) {
     pending.ca_term_offset = terms.length;
+  }
+
+  if (listingPagesThisPass > 0 && !outOfTime()) {
+    try {
+      await runListingSlice(listingPagesThisPass);
+    } catch (err) {
+      onError(`Compra ágil (listado reciente): ${err instanceof Error ? err.message : "Error"}`);
+    }
   }
 
   advanceCaRollingCursors(pending);
@@ -1252,7 +1274,9 @@ export async function runFastManualSync(
 
   if (!continueBatch) {
     const existing = await loadMpSyncPending(supabase, scope);
-    if (existing && !existing.finalized) {
+    if (scope === "compra_agil" && caQueueShouldReset(existing)) {
+      await saveMpSyncPending(supabase, scope, null);
+    } else if (existing && !existing.finalized) {
       continueBatch = true;
     } else {
       await saveMpSyncPending(supabase, scope, null);
@@ -1346,7 +1370,9 @@ export async function runDashboardSyncBatch(
       pending.errors = discoverErrors;
     }
     await saveMpSyncPending(supabase, scope, pending);
-    if (!(isVercelRuntime() && scope === "compra_agil")) {
+    const fetchCaInSameRequest =
+      scope === "compra_agil" && (isVercelRuntime() || options.serverSide);
+    if (!fetchCaInSameRequest) {
       return buildBatchResult(pending, false, scope === "compra_agil" ? "compra_agil" : "discover");
     }
   }
@@ -1437,7 +1463,6 @@ export async function recordCronAttempt(): Promise<void> {
     .from("org_settings")
     .update({
       last_cron_attempt_at: new Date().toISOString(),
-      last_cron_error: null,
       updated_at: new Date().toISOString(),
     })
     .eq("organization_id", DEFAULT_ORG_ID);
@@ -1480,18 +1505,24 @@ export async function runDashboardSyncCron(options?: {
   let cronCaPasses = 0;
   let cronLicDone = false;
   const scopesTouched = new Set<Exclude<SyncScope, "all">>();
-  const scopes = ["compra_agil", "licitacion"] as const;
-  const scopeDone: Record<(typeof scopes)[number], boolean> = {
+  const scopes: Array<"compra_agil" | "licitacion"> = isVercelRuntime()
+    ? ["compra_agil"]
+    : ["compra_agil", "licitacion"];
+  const scopeDone: Record<"compra_agil" | "licitacion", boolean> = {
     compra_agil: false,
-    licitacion: false,
+    licitacion: isVercelRuntime(),
   };
-  const continueBatchByScope: Record<(typeof scopes)[number], boolean> = {
+  const continueBatchByScope: Record<"compra_agil" | "licitacion", boolean> = {
     compra_agil: false,
     licitacion: false,
   };
 
   for (const scope of scopes) {
     const existing = await loadMpSyncPending(supabase, scope);
+    if (scope === "compra_agil" && caQueueShouldReset(existing)) {
+      await saveMpSyncPending(supabase, scope, null);
+      continue;
+    }
     if (existing && !existing.finalized) {
       await preparePendingForCron(supabase, scope, existing);
       continueBatchByScope[scope] = true;
@@ -1582,7 +1613,7 @@ export async function runDashboardSyncCron(options?: {
   const workDone =
     (ca?.created ?? 0) + (ca?.updated ?? 0) + (lic?.created ?? 0) + (lic?.updated ?? 0) + archived >
     0;
-  const cronHealthy = cronCaPasses >= 1 && (cronLicDone || round > 2);
+  const cronHealthy = cronCaPasses >= 1 && (isVercelRuntime() || cronLicDone || round > 2);
   const summary: IngestSummary & { archived?: number; partial?: boolean } = {
     fetched: (ca?.fetched ?? 0) + (lic?.fetched ?? 0),
     created: (ca?.created ?? 0) + (lic?.created ?? 0),

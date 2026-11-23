@@ -1,5 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
-import { isExcluded, keywordMatchesInText, normalizeMatchText } from "@/lib/dashboard/content-match";
+import { isExcluded, matchesInclusionKeywords, normalizeMatchText } from "@/lib/dashboard/content-match";
 import { buildProcessSearchText } from "@/lib/dashboard/process-relevance";
 import { looksLikeProcessCodigo } from "@/lib/dashboard/process-codigo";
 import { matchesRubrosUnspsc } from "@/lib/dashboard/unspsc-match";
@@ -134,7 +134,7 @@ function buildSearchText(
 }
 
 function matchesKeywords(text: string, keywords: string[]): boolean {
-  return keywords.some((k) => keywordMatchesInText(text, k));
+  return matchesInclusionKeywords(text, keywords);
 }
 
 function matchesRubros(text: string, rubros: Array<{ nombre: string }>): boolean {
@@ -161,7 +161,7 @@ function matchesContentFilter(
   if (keywords.length === 0 && rubros.length === 0) return true;
   if (keywords.length === 0) return byRubro || byUnspsc;
   if (rubros.length === 0) return byKeyword;
-  return byKeyword || byRubro || byUnspsc;
+  return byKeyword || byRubro;
 }
 
 export async function getDashboardProcesses(

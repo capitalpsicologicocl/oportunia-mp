@@ -70,16 +70,36 @@ const RUBRO_STOPWORDS = new Set([
   "y",
   "a",
   "con",
+  "sector",
+  "salud",
+  "empresas",
+  "proyectos",
+  "recursos",
+  "humanos",
+  "desarrollo",
+  "ventas",
+  "marketing",
+  "profesional",
+  "cientifica",
+  "científica",
+  "gerenciales",
+  "administrativos",
+  "gestion",
+  "gestión",
 ]);
+
+export function isWeakSearchToken(word: string): boolean {
+  return RUBRO_STOPWORDS.has(word.trim().toLowerCase());
+}
 
 export function extractRubroSearchTerms(rubros: Array<{ nombre: string }>): string[] {
   const terms = new Set<string>();
   for (const rubro of rubros) {
     const full = rubro.nombre.trim().toLowerCase();
-    if (full.length >= 4 && full.length <= 48) terms.add(full);
+    if (full.length >= 4 && full.length <= 32) terms.add(full);
     for (const word of full.split(/\s+/)) {
       const w = word.replace(/[^a-záéíóúñ0-9-]/gi, "");
-      if (w.length >= 5 && !RUBRO_STOPWORDS.has(w)) terms.add(w);
+      if (w.length >= 8 && !RUBRO_STOPWORDS.has(w)) terms.add(w);
     }
   }
   return [...terms];

@@ -150,6 +150,50 @@ export function keywordMatchesInText(text: string, keyword: string): boolean {
   return normalizedText.includes(normalizedKw);
 }
 
+/** Palabras del template que solas arrastran CA de otro rubro (sensores, fumigación, TI). */
+const AMBIGUOUS_KEYWORDS = new Set([
+  "monitoreo",
+  "diagnostico",
+  "certificacion",
+  "jornada",
+  "competencias",
+  "metodologia",
+  "facilitacion",
+  "transcripcion",
+  "implementacion",
+  "sistema",
+]);
+
+const NICHE_CONTEXT = [
+  "capacitacion",
+  "curso",
+  "taller",
+  "formacion",
+  "coaching",
+  "consultoria",
+  "liderazgo",
+  "bienestar",
+  "otec",
+  "sence",
+  "aprendizaje",
+  "induccion",
+  "psicoeducacion",
+  "clima laboral",
+  "recursos humanos",
+  "rrhh",
+  "habilidades blandas",
+  "desarrollo organizacional",
+];
+
+export function isAmbiguousKeyword(keyword: string): boolean {
+  return AMBIGUOUS_KEYWORDS.has(normalizeMatchText(keyword.trim()));
+}
+
+function hasNicheContext(text: string): boolean {
+  const normalized = normalizeMatchText(text);
+  return NICHE_CONTEXT.some((stem) => normalized.includes(stem));
+}
+
 export function isExcluded(text: string): boolean {
   const normalized = normalizeMatchText(text);
   return EXCLUSION_KEYWORDS.some((ex) => normalized.includes(normalizeMatchText(ex)));
@@ -157,7 +201,10 @@ export function isExcluded(text: string): boolean {
 
 export function matchesInclusionKeywords(text: string, keywords: string[]): boolean {
   if (keywords.length === 0) return false;
-  return keywords.some((kw) => keywordMatchesInText(text, kw));
+  const coreHit = keywords.some((kw) => !isAmbiguousKeyword(kw) && keywordMatchesInText(text, kw));
+  if (coreHit) return true;
+  const ambiguousHit = keywords.some((kw) => isAmbiguousKeyword(kw) && keywordMatchesInText(text, kw));
+  return ambiguousHit && hasNicheContext(text);
 }
 
 /** Paridad GAS: keyword activa en el texto y sin exclusiones. */
