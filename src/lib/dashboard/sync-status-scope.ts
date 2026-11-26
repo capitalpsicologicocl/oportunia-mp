@@ -13,6 +13,9 @@ export async function getMpSyncStatusForScope(
   lastCronError: string | null;
   lastCronSummaryPartial: boolean | null;
   lastCronSummaryText: string | null;
+  lastCronSummarySource: string | null;
+  lastCronSummaryAt: string | null;
+  remoteSyncActive: boolean;
   pendingQueueLabel: string | null;
   cronImportStale: boolean;
   cronMpError: string | null;
@@ -61,20 +64,29 @@ export async function getMpSyncStatusForScope(
     archived?: number;
     mpError?: string | null;
     at?: string;
+    source?: string | null;
   } | null;
   const lastCronSummaryPartial =
     typeof cronSummary?.partial === "boolean" ? cronSummary.partial : null;
+  const lastCronSummarySource = cronSummary?.source ?? null;
+  const lastCronSummaryAt = cronSummary?.at ?? null;
+  const remoteSyncActive =
+    lastCronSummarySource === "github_queued" || lastCronSummarySource === "github_running";
 
   const summaryParts: string[] = [];
   if (cronSummary?.created) summaryParts.push(`${cronSummary.created} nuevos`);
   if (cronSummary?.updated) summaryParts.push(`${cronSummary.updated} actualizados`);
   if (cronSummary?.archived) summaryParts.push(`${cronSummary.archived} archivados`);
   const lastCronSummaryText =
-    summaryParts.length > 0
-      ? `${lastCronSummaryPartial ? "parcial · " : ""}${summaryParts.join(" · ")}`
-      : lastCronSummaryPartial
-        ? "sin importaciones en la última corrida"
-        : null;
+    remoteSyncActive
+      ? "GitHub Actions: importando CA abiertas…"
+      : lastCronSummarySource === "github_action"
+        ? `${lastCronSummaryPartial ? "parcial · " : ""}${summaryParts.join(" · ") || "sin novedades"}`
+        : summaryParts.length > 0
+          ? `${lastCronSummaryPartial ? "parcial · " : ""}${summaryParts.join(" · ")}`
+          : lastCronSummaryPartial
+            ? "sin importaciones en la última corrida"
+            : null;
 
   const pendingRaw = row?.[pendingCol] as
     | {
@@ -96,13 +108,14 @@ export async function getMpSyncStatusForScope(
   const cronMpError = cronSummary?.mpError ?? pendingMpError ?? lastCronError;
 
   const cronImportStale = Boolean(
-    lastCronAttemptAt &&
+    !remoteSyncActive &&
+      lastCronAttemptAt &&
       lastCronSyncAt &&
       new Date(lastCronAttemptAt).getTime() - new Date(lastCronSyncAt).getTime() > 3 * 60 * 60 * 1000
   );
 
   let pendingQueueLabel: string | null = null;
-  if (pendingRaw && !pendingRaw.finalized) {
+  if (!remoteSyncActive && pendingRaw && !pendingRaw.finalized) {
     if (scope === "compra_agil" && pendingRaw.ca_fetched === false) {
       const terms = pendingRaw.ca_search_terms?.length ?? 0;
       const offset = pendingRaw.ca_term_offset ?? 0;
@@ -123,6 +136,9 @@ export async function getMpSyncStatusForScope(
     lastCronError,
     lastCronSummaryPartial,
     lastCronSummaryText,
+    lastCronSummarySource,
+    lastCronSummaryAt,
+    remoteSyncActive,
     pendingQueueLabel,
     cronImportStale,
     cronMpError,

@@ -1,0 +1,43 @@
+name: Sync Compra Ágil
+
+on:
+  schedule:
+    # 01:01 y 10:01 hora Chile (UTC−3)
+    - cron: "1 4 * * *"
+    - cron: "1 13 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-compra-agil
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Importar Compra Ágil abiertas
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MP_CA_ALL_OPEN: "1"
+          MP_CA_PAGES_PER_KEYWORD: "2"
+          MP_CA_KEYWORDS_PER_BATCH: "5"
+          MP_CA_CANDIDATE_MAX: "2000"
+          MP_FETCH_TIMEOUT_MS: "15000"
+          SYNC_MAX_MINUTES: "22"
+          SYNC_TRIGGER: ${{ github.event_name == 'schedule' && 'schedule' || 'manual' }}
+          SYNC_VERBOSE: "1"
+        run: npx tsx scripts/sync-ca-full.ts

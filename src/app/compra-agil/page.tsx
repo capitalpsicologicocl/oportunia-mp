@@ -14,6 +14,6 @@ export default async function CompraAgilPage({ searchParams }: PageProps) {
     basePath: "/compra-agil",
     title: "Compra Ágil",
     emptyHint:
-      "Pulsa Sincronizar Compra Ágil para importar cotizaciones publicadas en las últimas 72 horas.",
+      "Pulsa Sincronizar Compra Ágil para importar las cotizaciones abiertas de tus rubros y palabras clave (corre en GitHub, ~5–15 min).",
   });
 }

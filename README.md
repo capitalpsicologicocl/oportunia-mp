@@ -47,14 +47,28 @@ npm run migrate:sheets
 
 Los CSV deben estar en `data/migration/`.
 
-## Cron de ingesta (Vercel)
+## Sync Compra Ágil (GitHub Actions)
 
-En producción, configura `CRON_SECRET` en Vercel. El cron llama a `/api/cron/ingest` cada 6 horas.
+La importación de CA abiertas **no corre en Vercel Hobby** (máx. ~10 s). Corre en GitHub Actions (~5–15 min), igual que el script local `npm run sync:ca-full`.
 
-Para probar manualmente:
+### Secretos del repo (Settings → Secrets and variables → Actions)
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+Horario: **01:01 y 10:01 hora Chile**. El botón **Sincronizar Compra Ágil** dispara el mismo workflow.
+
+### Botón del dashboard (Vercel)
+
+Crea un PAT (fine-grained) con **Actions: Read and write** sobre este repo y agrégalo en Vercel:
+
+- `GITHUB_SYNC_TOKEN`
+- `GITHUB_REPO=capitalpsicologicocl/oportunia-mp` (opcional si el deploy ya trae `VERCEL_GIT_REPO_*`)
+
+Para probar a mano:
 
 ```bash
-curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/ingest
+gh workflow run sync-compra-agil.yml
 ```
 
 ## Fase (b) — Onboarding

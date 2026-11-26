@@ -11,6 +11,9 @@ type SyncApiResponse = {
   error?: string;
   done?: boolean;
   partial?: boolean;
+  remote?: boolean;
+  queued?: boolean;
+  alreadyRunning?: boolean;
   progress?: { total: number; processed: number };
   phase?: string;
   summary?: {
@@ -23,6 +26,21 @@ type SyncApiResponse = {
   };
 };
 
+type SyncStatusPayload = {
+  isFirstSync?: boolean;
+  lastSyncLabel?: string;
+  lastManualSyncLabel?: string;
+  lastCronSyncLabel?: string;
+  lastCronAttemptLabel?: string;
+  lastCronError?: string | null;
+  lastCronSummaryPartial?: boolean | null;
+  lastCronSummaryText?: string | null;
+  lastCronSummarySource?: string | null;
+  lastCronSummaryAt?: string | null;
+  remoteSyncActive?: boolean;
+  pendingQueueLabel?: string | null;
+};
+
 export function SyncMercadoPublicoButton({
   scope,
   isFirstSync: isFirstSyncProp,
@@ -33,6 +51,8 @@ export function SyncMercadoPublicoButton({
   lastCronError: lastCronErrorProp,
   lastCronSummaryPartial: lastCronSummaryPartialProp,
   lastCronSummaryText: lastCronSummaryTextProp,
+  lastCronSummarySource: lastCronSummarySourceProp,
+  remoteSyncActive: remoteSyncActiveProp,
   pendingQueueLabel: pendingQueueLabelProp,
   cronImportStale: cronImportStaleProp,
   cronMpError: cronMpErrorProp,
@@ -46,6 +66,8 @@ export function SyncMercadoPublicoButton({
   lastCronError?: string | null;
   lastCronSummaryPartial?: boolean | null;
   lastCronSummaryText?: string | null;
+  lastCronSummarySource?: string | null;
+  remoteSyncActive?: boolean;
   pendingQueueLabel?: string | null;
   cronImportStale?: boolean;
   cronMpError?: string | null;
@@ -65,6 +87,8 @@ export function SyncMercadoPublicoButton({
     lastCronError: null as string | null,
     lastCronSummaryPartial: null as boolean | null,
     lastCronSummaryText: null as string | null,
+    lastCronSummarySource: null as string | null,
+    remoteSyncActive: false,
     pendingQueueLabel: null as string | null,
   });
 
@@ -79,18 +103,7 @@ export function SyncMercadoPublicoButton({
     }
     fetch(`/api/ingest/sync-status?scope=${scope}`)
       .then((res) => res.json())
-      .then(
-        (data: {
-          isFirstSync?: boolean;
-          lastSyncLabel?: string;
-          lastManualSyncLabel?: string;
-          lastCronSyncLabel?: string;
-          lastCronAttemptLabel?: string;
-          lastCronError?: string | null;
-          lastCronSummaryPartial?: boolean | null;
-          lastCronSummaryText?: string | null;
-          pendingQueueLabel?: string | null;
-        }) => {
+      .then((data: SyncStatusPayload) => {
           setSyncMeta({
             isFirstSync: data.isFirstSync ?? true,
             lastSyncLabel: data.lastSyncLabel ?? "Nunca",
@@ -100,6 +113,8 @@ export function SyncMercadoPublicoButton({
             lastCronError: data.lastCronError ?? null,
             lastCronSummaryPartial: data.lastCronSummaryPartial ?? null,
             lastCronSummaryText: data.lastCronSummaryText ?? null,
+            lastCronSummarySource: data.lastCronSummarySource ?? null,
+            remoteSyncActive: data.remoteSyncActive ?? false,
             pendingQueueLabel: data.pendingQueueLabel ?? null,
           });
         }
@@ -130,6 +145,8 @@ export function SyncMercadoPublicoButton({
   const lastCronSummaryPartial =
     lastCronSummaryPartialProp ?? syncMeta.lastCronSummaryPartial;
   const lastCronSummaryText = lastCronSummaryTextProp ?? syncMeta.lastCronSummaryText;
+  const lastCronSummarySource = lastCronSummarySourceProp ?? syncMeta.lastCronSummarySource;
+  const remoteSyncActive = remoteSyncActiveProp ?? syncMeta.remoteSyncActive;
   const pendingQueueLabel = pendingQueueLabelProp ?? syncMeta.pendingQueueLabel;
   const cronImportStale = cronImportStaleProp ?? false;
   const cronMpError = cronMpErrorProp ?? null;
@@ -148,18 +165,73 @@ export function SyncMercadoPublicoButton({
     }
   }
 
+  async function pollRemoteCaSync(startedAt: number): Promise<SyncStatusPayload> {
+    const deadline = Date.now() + 12 * 60 * 1000;
+    let last: SyncStatusPayload = {};
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 8000));
+      const res = await fetch(`/api/ingest/sync-status?scope=${scope}`);
+      last = (await res.json()) as SyncStatusPayload;
+      if (last.remoteSyncActive) {
+        setProgress("GitHub Actions está importando CA abiertas (puede tardar 5–15 min)…");
+        router.refresh();
+        continue;
+      }
+      const finishedAt = last.lastCronSummaryAt ? Date.parse(last.lastCronSummaryAt) : 0;
+      if (last.lastCronSummarySource === "github_action" && finishedAt >= startedAt - 15_000) {
+        return last;
+      }
+    }
+    return last;
+  }
+
   async function handleSync() {
     setLoading(true);
     setError(null);
     setResult(null);
     setProgress(
-      isFirstSync
-        ? "Sincronización inicial (varias rondas cortas, ~2–4 min)…"
-        : "Actualizando dashboard (listado reciente + keywords, ~1 min)…"
+      scope === "compra_agil"
+        ? "Disparando sync completa en GitHub Actions…"
+        : isFirstSync
+          ? "Sincronización inicial (varias rondas cortas, ~2–4 min)…"
+          : "Actualizando dashboard (listado reciente + keywords, ~1 min)…"
     );
     startSessionKeepAlive();
 
     try {
+      if (scope === "compra_agil") {
+        const startedAt = Date.now();
+        const res = await fetch("/api/ingest/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scope }),
+        });
+        const data = (await res.json()) as SyncApiResponse;
+        if (!res.ok || !data?.ok) {
+          throw new Error(data?.error ?? `Error HTTP ${res.status}`);
+        }
+        setProgress(
+          data.alreadyRunning
+            ? "Ya hay una sync en curso en GitHub. Esperando a que termine…"
+            : "GitHub Actions está importando CA abiertas (puede tardar 5–15 min)…"
+        );
+        const status = await pollRemoteCaSync(startedAt);
+        setProgress(null);
+        if (status.lastCronSummarySource === "github_action") {
+          setResult(status.lastCronSummaryText ?? "Sync completa en GitHub Actions.");
+        } else if (status.remoteSyncActive) {
+          setResult(
+            "La sync sigue corriendo en GitHub Actions. Recarga el dashboard en unos minutos."
+          );
+        } else {
+          setResult(
+            "La sync se disparó en GitHub. Recarga en unos minutos si aún no ves CA nuevas."
+          );
+        }
+        router.refresh();
+        return;
+      }
+
       let continueBatch = false;
       let rounds = 0;
       const maxRounds = 60;
@@ -167,7 +239,7 @@ export function SyncMercadoPublicoButton({
       const maxTimeoutRetries = 2;
       let lastData: SyncApiResponse | null = null;
 
-      const maxRoundsForScope = scope === "compra_agil" ? 1 : maxRounds;
+      const maxRoundsForScope = maxRounds;
 
       while (rounds < maxRoundsForScope) {
         rounds += 1;
@@ -254,9 +326,7 @@ export function SyncMercadoPublicoButton({
             : "actualización incremental";
 
       let suffix = "";
-      if (scope === "compra_agil") {
-        suffix = " · un paso (pulsa de nuevo para seguir el listado)";
-      } else if (!data.done) {
+      if (!data.done) {
         setError(
           "Sync parcial por tiempo. Pulsa Sincronizar otra vez para continuar (retoma automáticamente)."
         );
@@ -297,7 +367,7 @@ export function SyncMercadoPublicoButton({
       : "Sincronizando licitaciones…"
     : isFirstSync
       ? isCa
-        ? "Sincronizar Compra Ágil (72 h)"
+        ? "Sincronizar Compra Ágil"
         : "Sincronizar Licitaciones (72 h)"
       : isCa
         ? "Sincronizar Compra Ágil"
@@ -306,7 +376,13 @@ export function SyncMercadoPublicoButton({
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="button" variant="brand" size="sm" disabled={loading} onClick={handleSync}>
+        <Button
+          type="button"
+          variant="brand"
+          size="sm"
+          disabled={loading}
+          onClick={handleSync}
+        >
           {buttonLabel}
         </Button>
         <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
@@ -315,32 +391,39 @@ export function SyncMercadoPublicoButton({
             <strong className="text-foreground">{lastManualSyncLabel}</strong>
           </p>
           <p>
-            Última importación desde cron (~01:00 CL):{" "}
+            Última importación automática (GitHub, 01:01 y 10:01 CL):{" "}
             <strong className="text-foreground">{lastCronSyncLabel}</strong>
-            {lastCronSummaryPartial === true && lastCronSyncLabel !== "Nunca" && (
-              <span className="text-amber-700"> · sin novedades</span>
+            {lastCronSummaryPartial === true &&
+              lastCronSyncLabel !== "Nunca" &&
+              lastCronSummarySource === "github_action" && (
+              <span className="text-amber-700"> · parcial</span>
             )}
           </p>
           {lastCronAttemptLabel !== "Nunca" && (
             <p className="text-[10px] text-muted-foreground">
-              Último intento del cron: <strong className="text-foreground">{lastCronAttemptLabel}</strong>
+              Último intento automático: <strong className="text-foreground">{lastCronAttemptLabel}</strong>
             </p>
           )}
           {cronImportStale && (
             <p className="text-[10px] text-amber-800">
-              El cron se ejecutó después de la última importación, pero Mercado Público no entregó datos
-              {cronMpError ? `: ${cronMpError}` : "."} Pulsa Sincronizar Compra Ágil o reintenta más tarde.
+              El job automático corrió después de la última importación, pero no alcanzó a guardar CA nuevas
+              {cronMpError ? `: ${cronMpError}` : "."} Pulsa Sincronizar Compra Ágil.
             </p>
           )}
           {lastCronSummaryText && (
-            <p className="text-[10px] text-muted-foreground">Último cron: {lastCronSummaryText}</p>
+            <p className="text-[10px] text-muted-foreground">Última corrida: {lastCronSummaryText}</p>
+          )}
+          {isCa && remoteSyncActive && !loading && (
+            <p className="text-[10px] text-amber-800">
+              Hay una sync larga en GitHub ahora. Pulsa el botón para esperar el resultado, o recarga en unos minutos.
+            </p>
           )}
           {pendingQueueLabel && (
             <p className="text-[10px] text-amber-800">Cola pendiente: {pendingQueueLabel}</p>
           )}
           {lastCronSyncLabel === "Nunca" && lastCronAttemptLabel !== "Nunca" && (
             <p className="text-[10px] text-amber-800">
-              Cron intentó: {lastCronAttemptLabel}
+              Intento automático: {lastCronAttemptLabel}
               {lastCronError ? ` · error: ${lastCronError}` : ""}
             </p>
           )}
@@ -355,8 +438,8 @@ export function SyncMercadoPublicoButton({
       {!isFirstSync && !loading && (
         <p className="text-xs text-muted-foreground">
           {isCa
-            ? "Un clic pide una página a Mercado Público (~10 s en Vercel). Si MP no responde, abre el código en el buscador para revisar."
-            : "Sync en servidor: busca licitaciones recientes (~1–2 min). Cron nocturno ~01:00 CL."}
+            ? "Un clic dispara la misma sync larga que corre de madrugada en GitHub Actions (CA abiertas de tus rubros y keywords, ~5–15 min)."
+            : "Sync en servidor: busca licitaciones recientes (~1–2 min)."}
         </p>
       )}
       {result && (

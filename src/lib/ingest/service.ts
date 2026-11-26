@@ -483,7 +483,7 @@ function buildCompraAgilSearchTerms(
   const rubroTerms = extractRubroSearchTerms(rubros).filter(
     (term) => !isAmbiguousKeyword(term) && !isWeakSearchToken(term)
   );
-  return [...new Set([...keywordTerms, ...rubroTerms])].slice(0, 36);
+  return [...new Set([...keywordTerms, ...rubroTerms])].slice(0, 80);
 }
 
 function refreshCaSearchTerms(
@@ -491,6 +491,9 @@ function refreshCaSearchTerms(
   keywords: string[],
   rubros: Array<{ nombre: string }>
 ) {
+  if (process.env.MP_CA_LOCK_TERMS === "1" && pending.ca_search_terms?.length) {
+    return;
+  }
   const next = buildCompraAgilSearchTerms(keywords, rubros);
   const prev = pending.ca_search_terms;
   const offset = pending.ca_term_offset ?? 0;
@@ -956,9 +959,10 @@ async function appendCompraAgilCandidates(
   pending.errors = pending.errors.filter((e) => !/listado reciente|no respondió/i.test(e));
   const discoverMode = pending.ca_discover_mode ?? "incremental";
   pending.ca_publicado_desde = compraAgilPublicadoDesdeIso(lastSyncAt, discoverMode);
-  const keywordPublicadoDesde = caKeywordSearchPublicadoDesdeIso();
+  const allOpen = process.env.MP_CA_ALL_OPEN === "1";
+  const keywordPublicadoDesde = allOpen ? undefined : caKeywordSearchPublicadoDesdeIso();
   /** Listado reciente: siempre ventana 72 h (keywords y listado alineados). */
-  const listingPublicadoDesde = keywordPublicadoDesde;
+  const listingPublicadoDesde = keywordPublicadoDesde ?? caKeywordSearchPublicadoDesdeIso();
   const tightBudget = isVercelRuntime();
   const mpTimeoutMs = tightBudget ? 4_500 : 12_000;
   const mpAttempts = tightBudget
@@ -966,7 +970,7 @@ async function appendCompraAgilCandidates(
     : Math.max(1, Number.parseInt(process.env.MP_SYNC_MAX_ATTEMPTS ?? "2", 10) || 2);
   const keywordAttempts = 1;
   const mpFast = { maxAttempts: keywordAttempts, timeoutMs: mpTimeoutMs };
-  const caEstados = "publicada,cerrada,proveedor_seleccionado,desierta,cancelada";
+  const caEstados = "publicada";
 
   const outOfTime = () =>
     options?.deadlineMs !== undefined && Date.now() >= options.deadlineMs;

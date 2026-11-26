@@ -142,6 +142,8 @@ export async function renderTipoDashboard({
           lastCronError={syncStatus.lastCronError}
           lastCronSummaryPartial={syncStatus.lastCronSummaryPartial}
           lastCronSummaryText={syncStatus.lastCronSummaryText}
+          lastCronSummarySource={syncStatus.lastCronSummarySource}
+          remoteSyncActive={syncStatus.remoteSyncActive}
           pendingQueueLabel={syncStatus.pendingQueueLabel}
           cronImportStale={syncStatus.cronImportStale}
           cronMpError={syncStatus.cronMpError}
